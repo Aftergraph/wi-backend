@@ -7,7 +7,7 @@ dependencies = [
   "fastapi>=0.128,<0.129",
   "uvicorn>=0.48,<0.49",
   "pydantic>=2.13,<3",
-  "psutil>=7,<8",
+  "psutil>=5.9,<7",
 ]
 
 [project.optional-dependencies]
@@ -27,15 +27,3 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.ruff.lint]
-# Explicit rule set — ruff 0.16's all-rules default is too broad for a
-# FastAPI service (BLE001 blind-excepts are deliberate in best-effort
-# webhook/broadcast paths; S110 pass in cleanup), so we select the rules
-# this repo actually enforces as its quality bar.
-select = ["E4", "E7", "E9", "F", "UP", "RUF", "DTZ", "SIM", "PIE"]
-
-[tool.ruff.lint.flake8-bugbear]
-# FastAPI idiom: Depends()/Query()/Body() in defaults is the documented
-# pattern, not a bug.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.Header", "fastapi.Path"]
