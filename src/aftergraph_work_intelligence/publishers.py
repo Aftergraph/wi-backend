@@ -227,12 +227,17 @@ def _build_works_payload(work_item: WorkItem, observations: list[Observation]) -
         "source": src,
         "state": "CREATED",
         "objective": {
-            "summary": work_item.summary,
-            "title": work_item.title,
-            "next_action": work_item.next_action,
-            "priority": work_item.priority,
-            "owner": work_item.owner,
-            "due_hint": work_item.due_hint,
+            "type": "custom",
+            "description": work_item.summary or work_item.title,
+            "constraints": {
+                "work_item_id": work_item.id,
+                "title": work_item.title,
+                "next_action": work_item.next_action,
+                "priority": work_item.priority,
+                "owner": work_item.owner,
+                "due_hint": work_item.due_hint,
+                "tenant_id": work_item.tenant_id,
+            },
         },
         "graph": {
             "nodes": {

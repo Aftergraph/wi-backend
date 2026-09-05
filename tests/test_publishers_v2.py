@@ -254,8 +254,9 @@ def test_works_publisher_posts_conformant_work_payload():
         # Source carries provenance
         assert submitted["source"]["kind"] == "aftergraph.work-intelligence"
         assert submitted["source"]["work_item_id"] == _make_work_item().id
-        # Objective reflects the canonical work-item
-        assert submitted["objective"]["summary"] == "Vi skal sende kunden en bekræftelse før mandag"
+        # Objective reflects the canonical work-item (works-execution contract: type+description)
+        assert submitted["objective"]["type"] == "custom"
+        assert submitted["objective"]["description"] == "Vi skal sende kunden en bekræftelse før mandag"
     finally:
         server.should_exit = True
         thread.join(timeout=2)
