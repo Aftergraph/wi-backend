@@ -228,6 +228,350 @@ class CodeAdapter(SourceAdapter):
                 todo_idx += 1
 
 
+class GitHubAdapter(SourceAdapter):
+    """Adapter for GitHub webhook payloads (push, pull_request, issues,
+    check_run, workflow_run, issue_comment).
+
+    Payload contract: a raw GitHub webhook event dict with:
+    {
+      "tenant_id": str,
+      "repository": {"full_name": str, "name": str},
+      "ref": str,                # push only
+      "head_commit": {...},      # push only
+      "commits": [...],          # push only
+      "action": str,             # non-push events
+      "pull_request": {...},     # pull_request only
+      "issue": {...},            # issues / issue_comment
+      "check_run": {...},        # check_run only
+      "workflow_run": {...},     # workflow_run only
+      "comment": {...},          # issue_comment only
+      "pusher": {"name": str},   # push only
+    }
+
+    Emits observations only for ACTIONABLE signals:
+      - push commits (each commit = 1 observation), non-bot authors
+      - pull_request opened / review_requested / closed(merged)
+      - issues opened / closed
+      - check_run / workflow_run completed with conclusion=failure
+      - issue_comment by non-bot users
+    Success states (check_run success, workflow success, bot comments,
+    non-merged PR close) emit nothing.
+    """
+
+    source = "github"
+
+    _BOT_SUFFIXES = ("[bot]", "-bot", "dependabot", "renovate")
+
+    @staticmethod
+    def _is_bot(login: str | None) -> bool:
+        if not login:
+            return True
+        lowered = login.lower()
+        return any(suffix in lowered for suffix in GitHubAdapter._BOT_SUFFIXES)
+
+    @staticmethod
+    def _repo_name(payload: dict[str, Any]) -> str:
+        repo = payload.get("repository") or {}
+        return repo.get("full_name") or repo.get("name") or "unknown"
+
+    def _base(self, payload: dict[str, Any], event: str, actor: str | None, occurred_at: str | None) -> ObservationInput | None:
+        tenant_id = payload.get("tenant_id")
+        if not tenant_id:
+            return None
+        return ObservationInput(
+            tenant_id=tenant_id,
+            source=self.source,
+            text="",
+            actor=actor,
+            occurred_at=_parse_iso(occurred_at) if occurred_at else None,
+            metadata={"event": event, "repo": self._repo_name(payload)},
+        )
+
+    def observations(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload.get("tenant_id")
+        if not tenant_id:
+            return
+        event = self._detect_event(payload)
+        if event == "push":
+            yield from self._on_push(payload)
+        elif event == "pull_request":
+            yield from self._on_pull_request(payload)
+        elif event == "issues":
+            yield from self._on_issues(payload)
+        elif event == "check_run":
+            yield from self._on_check_run(payload)
+        elif event == "workflow_run":
+            yield from self._on_workflow_run(payload)
+        elif event == "issue_comment":
+            yield from self._on_issue_comment(payload)
+        # Unknown / unactionable events produce nothing.
+
+    @staticmethod
+    def _detect_event(payload: dict[str, Any]) -> str | None:
+        if "head_commit" in payload or "commits" in payload:
+            return "push"
+        if "pull_request" in payload:
+            return "pull_request"
+        if "check_run" in payload:
+            return "check_run"
+        if "workflow_run" in payload:
+            return "workflow_run"
+        if "issue" in payload and "comment" in payload:
+            return "issue_comment"
+        if "issue" in payload:
+            return "issues"
+        return None
+
+    # ---- push ----
+
+    def _on_push(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload["tenant_id"]
+        repo_full = self._repo_name(payload)
+        repo_short = repo_full.split("/")[-1]
+        ref = payload.get("ref") or ""
+        branch = ref.removeprefix("refs/heads/") or "unknown"
+        pusher = (payload.get("pusher") or {}).get("name")
+        if self._is_bot(pusher):
+            return
+        commits = payload.get("commits")
+        if not commits:
+            head = payload.get("head_commit") or {}
+            if head.get("id"):
+                commits = [head]
+        for commit in commits or []:
+            sha = commit.get("id") or commit.get("sha") or ""
+            message = commit.get("message") or ""
+            author = (commit.get("author") or {}).get("username") or (commit.get("author") or {}).get("name")
+            if self._is_bot(author):
+                continue
+            occurred = commit.get("timestamp")
+            first_line = message.splitlines()[0] if message else ""
+            yield ObservationInput(
+                tenant_id=tenant_id,
+                source=self.source,
+                text=first_line or message or f"Push to {repo_short}",
+                external_id=f"{repo_full}:{sha}",
+                actor=author or pusher,
+                occurred_at=_parse_iso(occurred) if occurred else None,
+                title_hint=f"Push to {repo_short}: {first_line}" if first_line else f"Push to {repo_short}",
+                metadata={
+                    "event": "push",
+                    "repo": repo_full,
+                    "branch": branch,
+                    "sha": sha,
+                    "commit": message,
+                    "pusher": pusher,
+                },
+            )
+
+    # ---- pull_request ----
+
+    def _on_pull_request(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload["tenant_id"]
+        repo_full = self._repo_name(payload)
+        pr = payload.get("pull_request") or {}
+        action = payload.get("action") or "unknown"
+        number = pr.get("number")
+        title = pr.get("title") or ""
+        user = (pr.get("user") or {}).get("login") or (payload.get("sender") or {}).get("login")
+        if self._is_bot(user):
+            return
+        # review_requested
+        if action == "review_requested":
+            reviewers = [r.get("login") for r in (payload.get("requested_reviewers") or []) if r.get("login")]
+            if not reviewers:
+                return
+            yield ObservationInput(
+                tenant_id=tenant_id,
+                source=self.source,
+                text=f"PR #{number} '{title}' awaits review from {', '.join(reviewers)}",
+                external_id=f"{repo_full}:pr:{number}:review_requested",
+                actor=user,
+                occurred_at=_parse_iso(pr.get("created_at")) if pr.get("created_at") else None,
+                title_hint=f"PR #{number} review requested: {title}",
+                priority_hint="high",
+                metadata={
+                    "event": "pull_request",
+                    "action": action,
+                    "repo": repo_full,
+                    "pr_number": number,
+                    "title": title,
+                    "requested_reviewers": reviewers,
+                    "url": pr.get("html_url"),
+                },
+            )
+            return
+        # merged
+        if action == "closed" and pr.get("merged"):
+            yield ObservationInput(
+                tenant_id=tenant_id,
+                source=self.source,
+                text=f"PR #{number} merged: {title}",
+                external_id=f"{repo_full}:pr:{number}:merged",
+                actor=user,
+                occurred_at=_parse_iso(pr.get("merged_at")) if pr.get("merged_at") else None,
+                title_hint=f"PR #{number} merged: {title}",
+                metadata={
+                    "event": "pull_request",
+                    "action": "closed",
+                    "repo": repo_full,
+                    "pr_number": number,
+                    "title": title,
+                    "merged": True,
+                    "url": pr.get("html_url"),
+                },
+            )
+            return
+        # opened / reopened
+        if action in ("opened", "reopened"):
+            yield ObservationInput(
+                tenant_id=tenant_id,
+                source=self.source,
+                text=f"PR #{number} opened: {title}",
+                external_id=f"{repo_full}:pr:{number}:{action}",
+                actor=user,
+                occurred_at=_parse_iso(pr.get("created_at")) if pr.get("created_at") else None,
+                title_hint=f"PR #{number} opened: {title}",
+                priority_hint="medium",
+                metadata={
+                    "event": "pull_request",
+                    "action": action,
+                    "repo": repo_full,
+                    "pr_number": number,
+                    "title": title,
+                    "url": pr.get("html_url"),
+                },
+            )
+
+    # ---- issues ----
+
+    def _on_issues(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload["tenant_id"]
+        repo_full = self._repo_name(payload)
+        issue = payload.get("issue") or {}
+        action = payload.get("action") or "unknown"
+        number = issue.get("number")
+        title = issue.get("title") or ""
+        user = (issue.get("user") or {}).get("login")
+        if self._is_bot(user):
+            return
+        if action not in ("opened", "closed", "reopened"):
+            return
+        labels = [label.get("name") for label in (issue.get("labels") or []) if label.get("name")]
+        priority = "high" if "bug" in labels else "medium"
+        yield ObservationInput(
+            tenant_id=tenant_id,
+            source=self.source,
+            text=f"Issue #{number} {action}: {title}" + (f" ({', '.join(labels)})" if labels else ""),
+            external_id=f"{repo_full}:issue:{number}:{action}",
+            actor=user,
+            occurred_at=_parse_iso(issue.get("created_at")) if issue.get("created_at") else None,
+            priority_hint=priority,
+            title_hint=f"Issue #{number} {action}: {title}",
+            metadata={
+                "event": "issues",
+                "action": action,
+                "repo": repo_full,
+                "issue_number": number,
+                "title": title,
+                "labels": labels,
+                "state": issue.get("state"),
+                "url": issue.get("html_url"),
+            },
+        )
+
+    # ---- check_run / workflow_run ----
+
+    def _on_check_run(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload["tenant_id"]
+        repo_full = self._repo_name(payload)
+        check = payload.get("check_run") or {}
+        conclusion = (check.get("conclusion") or "").lower()
+        if conclusion not in ("failure", "timed_out", "cancelled"):
+            return
+        name = check.get("name") or "check"
+        sha = (check.get("head_sha") or "")[:7]
+        yield ObservationInput(
+            tenant_id=tenant_id,
+            source=self.source,
+            text=f"Check '{name}' failed on {sha}",
+            external_id=f"{repo_full}:check:{check.get('id')}:{conclusion}",
+            actor=None,
+            occurred_at=_parse_iso(check.get("completed_at")) if check.get("completed_at") else None,
+            priority_hint="high",
+            title_hint=f"CI check failed: {name} on {sha}",
+            metadata={
+                "event": "check_run",
+                "repo": repo_full,
+                "conclusion": conclusion,
+                "check_id": check.get("id"),
+                "name": name,
+                "sha": sha,
+                "url": check.get("html_url"),
+            },
+        )
+
+    def _on_workflow_run(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload["tenant_id"]
+        repo_full = self._repo_name(payload)
+        run = payload.get("workflow_run") or {}
+        conclusion = (run.get("conclusion") or "").lower()
+        if conclusion not in ("failure", "timed_out", "cancelled"):
+            return
+        name = run.get("name") or "workflow"
+        sha = (run.get("head_sha") or "")[:7]
+        yield ObservationInput(
+            tenant_id=tenant_id,
+            source=self.source,
+            text=f"Workflow '{name}' failed on {sha}",
+            external_id=f"{repo_full}:workflow:{run.get('id')}:{conclusion}",
+            actor=None,
+            occurred_at=_parse_iso(run.get("updated_at")) if run.get("updated_at") else None,
+            priority_hint="high",
+            title_hint=f"CI workflow failed: {name} on {sha}",
+            metadata={
+                "event": "workflow_run",
+                "repo": repo_full,
+                "conclusion": conclusion,
+                "workflow_id": run.get("id"),
+                "name": name,
+                "sha": sha,
+                "branch": run.get("head_branch"),
+                "url": run.get("html_url"),
+            },
+        )
+
+    # ---- issue_comment ----
+
+    def _on_issue_comment(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
+        tenant_id = payload["tenant_id"]
+        repo_full = self._repo_name(payload)
+        comment = payload.get("comment") or {}
+        issue = payload.get("issue") or {}
+        user = (comment.get("user") or {}).get("login")
+        if self._is_bot(user):
+            return
+        body = (comment.get("body") or "").strip()
+        if not body:
+            return
+        yield ObservationInput(
+            tenant_id=tenant_id,
+            source=self.source,
+            text=body[:500],
+            external_id=f"{repo_full}:comment:{comment.get('id')}",
+            actor=user,
+            occurred_at=_parse_iso(comment.get("created_at")) if comment.get("created_at") else None,
+            title_hint=f"Comment on issue #{issue.get('number')}: {body[:80]}",
+            metadata={
+                "event": "issue_comment",
+                "repo": repo_full,
+                "issue_number": issue.get("number"),
+                "comment_id": comment.get("id"),
+                "url": comment.get("html_url"),
+            },
+        )
+
+
 class RenosAdapter(SourceAdapter):
     """Adapter for RenOS job-lifecycle signals.
 
@@ -293,6 +637,7 @@ __all__ = [
     "CodeAdapter",
     "ConversationAdapter",
     "EmailAdapter",
+    "GitHubAdapter",
     "RenosAdapter",
     "SourceAdapter",
 ]

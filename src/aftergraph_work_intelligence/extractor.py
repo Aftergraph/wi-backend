@@ -17,7 +17,8 @@ _DANISH_ACTION = {
 _ENGLISH_ACTION = {
     "must", "need", "needs", "remember", "send", "call", "book", "buy",
     "fix", "update", "follow", "pay", "order", "contact", "reply", "confirm",
-    "schedule", "assign", "create",
+    "schedule", "assign", "create", "review", "merge", "push", "deploy",
+    "publish", "failed", "failure", "approve",
 }
 _COMPLETION_PATTERNS = [
     r"\ber sendt\b", r"\bhar sendt\b", r"\bblev sendt\b", r"\ber udført\b",

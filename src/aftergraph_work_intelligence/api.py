@@ -38,6 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .audit import AuditLog
 from .body_log import BodyLoggingMiddleware
 from .cache import Cache
+from .adapters import GitHubAdapter
 from .evidence import build_evidence
 from .exceptions import WorkIntelligenceError
 from .metrics import MetricsRecorder
@@ -496,6 +497,68 @@ Production-grade observation → WorkItem inference engine.
         return response
     
     router = APIRouter(prefix="/v1")
+
+    @app.post("/v1/webhook/github", include_in_schema=True)
+    async def github_webhook(request: Request) -> JSONResponse:
+        """Inbound GitHub webhook: verify HMAC, map via GitHubAdapter, ingest.
+
+        Secret sourced from AFTERGRAPH_GITHUB_WEBHOOK_SECRET. If unset,
+        signature verification is skipped (dev mode).
+        """
+        raw = await request.body()
+        secret = os.getenv("AFTERGRAPH_GITHUB_WEBHOOK_SECRET")
+        if secret:
+            sig = request.headers.get("X-Hub-Signature-256", "")
+            expected = "sha256=" + _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
+            if not _hmac.compare_digest(sig, expected):
+                return JSONResponse(status_code=401, content={"detail": "invalid signature"})
+
+        event_name = request.headers.get("X-GitHub-Event", "push")
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
+
+        # Tenant resolution: explicit tenant_id in payload, else 'default'
+        tenant_id = payload.pop("tenant_id", None) or "default"
+        payload["tenant_id"] = tenant_id
+
+        adapter = GitHubAdapter()
+        observations = list(adapter.observations(payload))
+        if not observations:
+            return JSONResponse(status_code=202, content={
+                "event": event_name,
+                "status": "ignored",
+                "reason": "no actionable observations",
+            })
+
+        service: WorkIntelligenceService = request.app.state.service
+        created = 0
+        replayed = 0
+        work_item = None
+        for obs in observations:
+            result = service.ingest(obs)
+            if result.action == "replayed":
+                replayed += 1
+            else:
+                # created / observed / merged — all represent new signal
+                created += 1
+            work_item = work_item or result.work_item
+
+        status_code = 201 if created > 0 else 200
+        wi = work_item
+        return JSONResponse(status_code=status_code, content={
+            "event": event_name,
+            "status": "ingested" if created > 0 else "replayed",
+            "observations_created": created,
+            "observations_replayed": replayed,
+            "work_item": {
+                "id": getattr(wi, "id", None),
+                "source": adapter.source,
+                "priority": getattr(wi, "priority", None),
+                "observation_count": getattr(wi, "observation_count", None),
+            },
+        })
 
     def auth(
         request: Request,
