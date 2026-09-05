@@ -144,10 +144,7 @@ class TestErrorPatterns:
             ("GET", "/v1/tenants"),
         ]
         for method, path in endpoints:
-            if method == "POST":
-                resp = client.post(path, json={})
-            else:
-                resp = client.get(path)
+            resp = client.post(path, json={}) if method == "POST" else client.get(path)
             assert resp.status_code == 401, f"{method} {path} returned {resp.status_code}"
 
     def test_422_consistent(self, client):

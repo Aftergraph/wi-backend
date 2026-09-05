@@ -12,18 +12,16 @@ Set env vars:
 
 If unavailable, tests skip gracefully.
 """
+import hashlib
+import http.client
+import json
 import os
 import sys
-import json
-import uuid
-import hashlib
-import sqlite3
-import tempfile
-import http.client
-import urllib.request
 import urllib.error
+import urllib.request
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 
 import pytest
 
@@ -88,7 +86,7 @@ def _renos_request(method, path, body=None):
 
 def _new_evidence_payload(**overrides):
     """Build a valid V5.1 evidence payload with defaults."""
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     base = {
         "subjectType": "approval",
         "subjectId": str(uuid.uuid4()),
@@ -139,7 +137,7 @@ class TestLiveRenOSEvidence:
     def test_evidence_idempotency(self):
         """Posting same evidence twice yields same record (idempotent)."""
         subject_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         idempotency_key = f"live-idem-{uuid.uuid4().hex[:8]}"
         payload = {
             "subjectType": "agent_run",
@@ -204,10 +202,10 @@ class TestLiveCrossRepoFlow:
     def test_canonical_flow_end_to_end(self):
         """Ingest observation, approve work item, write evidence to RenOS."""
         # 1. Create Work Intelligence service + ingest
-        from aftergraph_work_intelligence.store import SQLiteStore
-        from aftergraph_work_intelligence.service import WorkIntelligenceService
-        from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
         from aftergraph_work_intelligence.models import ObservationInput
+        from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
+        from aftergraph_work_intelligence.service import WorkIntelligenceService
+        from aftergraph_work_intelligence.store import SQLiteStore
 
         store = SQLiteStore(":memory:")
         ps = PolicyStore()
@@ -230,7 +228,7 @@ class TestLiveCrossRepoFlow:
         engine.approve(work_item.id, actor="live-test-operator")
 
         # 3. Write evidence to real RenOS
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         evidence_subject_id = str(uuid.uuid4())
         status, resp = _renos_request("POST", "/api/operations/evidence", {
             "subjectType": "approval",
@@ -274,7 +272,7 @@ class TestLiveEvidenceIntegrity:
     def test_evidence_metadata_round_trip_via_renos(self):
         """Write evidence with metadata, read back, verify data integrity."""
         subject_id = str(uuid.uuid4())
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         # Compute a content digest for integrity
         evidence_data = {

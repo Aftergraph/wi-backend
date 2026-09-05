@@ -16,16 +16,15 @@ from __future__ import annotations
 import io
 import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, IO
-
+from datetime import UTC, datetime
+from typing import IO, Any
 
 _LOGGER_NAME = "aftergraph.work-intelligence"
 
 
 def _format(record: logging.LogRecord) -> str:
     payload: dict[str, Any] = {
-        "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+        "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
         "level": record.levelname,
         "logger": record.name,
         "event": getattr(record, "event", None) or record.getMessage(),

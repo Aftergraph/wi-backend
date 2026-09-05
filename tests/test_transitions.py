@@ -20,7 +20,7 @@ without an actor (operator override path).
 """
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -91,7 +91,7 @@ def test_snooze_blocks_resolution_until_resume(tmp_path):
     svc = _make_service(tmp_path)
     wid = _create_item(svc, tmp_path)
     engine = _engine(svc)
-    resume_at = datetime.now(timezone.utc) + timedelta(hours=2)
+    resume_at = datetime.now(UTC) + timedelta(hours=2)
     item = engine.snooze(wid, actor="jonas", resume_at=resume_at)
     assert item.status == "SNOOZED"
     # A new actionable observation should NOT resolve into the snoozed item.

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
-
 
 logger = logging.getLogger("aftergraph.work-intelligence.body_log")
 

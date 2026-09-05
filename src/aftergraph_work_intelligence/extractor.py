@@ -29,7 +29,7 @@ _PRIORITY_HIGH = {"vigtigt", "important", "høj", "high", "prioritet"}
 _STOPWORDS = {
     "vi", "jeg", "du", "i", "de", "den", "det", "der", "en", "et", "at", "til",
     "på", "for", "før", "efter", "med", "og", "eller", "som", "skal", "husk", "stadig",
-    "we", "i", "you", "they", "the", "a", "an", "to", "for", "before", "after", "with",
+    "we", "you", "they", "the", "a", "an", "to", "before", "after", "with",
     "and", "or", "that", "this", "must", "need", "needs", "remember", "please", "tomorrow",
     "today", "kunden", "customer",
 }

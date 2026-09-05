@@ -10,19 +10,17 @@ Proves that the system survives:
 from __future__ import annotations
 
 import os
-import signal
 import subprocess
 import sys
 import time
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from aftergraph_work_intelligence.models import ObservationInput, utc_now
-from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
+from aftergraph_work_intelligence.policy import PolicyStore
 from aftergraph_work_intelligence.service import WorkIntelligenceService
 from aftergraph_work_intelligence.store import SQLiteStore
 from aftergraph_work_intelligence.transitions import TransitionEngine
@@ -145,7 +143,7 @@ class TestWALRecovery:
         store1 = SQLiteStore(db_path)
         svc1 = _svc(store1)
         ext_id = "replay:survive:test"
-        r1 = svc1.ingest(
+        svc1.ingest(
             ObservationInput(
                 tenant_id="t", source="conversation",
                 text="Køb flere bøger til kontoret replay", external_id=ext_id,
@@ -198,7 +196,7 @@ class TestWALRecovery:
         # Phase 2: reopen — dedup should still work
         store2 = SQLiteStore(db_path)
         svc2 = _svc(store2)
-        r3 = svc2.ingest(
+        svc2.ingest(
             ObservationInput(
                 tenant_id="t", source="conversation",
                 text="Køb bøger til kontoret",
@@ -247,8 +245,8 @@ class TestAPIRestart:
 
         try:
             # Wait for server to be ready with retry
-            import urllib.request
             import json
+            import urllib.request
 
             for attempt in range(10):
                 time.sleep(1)

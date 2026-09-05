@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 logger = logging.getLogger("aftergraph.work-intelligence.migrations")
@@ -67,7 +67,7 @@ class MigrationManager:
                         logger.warning(f"Migration {version} ({name}) statement failed: {e}")
             conn.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-                (version, name, datetime.now(timezone.utc).isoformat()),
+                (version, name, datetime.now(UTC).isoformat()),
             )
             conn.commit()
         finally:

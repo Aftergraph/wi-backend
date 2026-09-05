@@ -8,7 +8,8 @@ import json
 import threading
 import time
 import uuid
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -40,7 +41,7 @@ def _create(c, text="Vi skal købe 5 licenser til teamet hurtigt"):
 
 class MockWebhookHandler(BaseHTTPRequestHandler):
     """Simple handler that records received webhooks."""
-    received = []
+    received: ClassVar[list] = []
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))

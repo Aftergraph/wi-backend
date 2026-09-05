@@ -8,23 +8,17 @@ Measures:
 - SQLite WAL performance
 - Concurrent ingest scaling
 """
-import os
 import sys
 import time
-import statistics
-import sqlite3
-import threading
-from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
-import pytest
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from aftergraph_work_intelligence.store import SQLiteStore
-from aftergraph_work_intelligence.service import WorkIntelligenceService
-from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.models import ObservationInput
+from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
+from aftergraph_work_intelligence.service import WorkIntelligenceService
+from aftergraph_work_intelligence.store import SQLiteStore
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +79,7 @@ class TestIngestLatency:
         assert p99 < 100, f"p99 latency {p99:.2f}ms exceeds 100ms threshold"
         assert p50 < 50, f"p50 latency {p50:.2f}ms exceeds 50ms threshold"
 
-        print(f"\nIngest latency (1000 ops):")
+        print("\nIngest latency (1000 ops):")
         print(f"  p50: {p50:.2f}ms")
         print(f"  p95: {p95:.2f}ms")
         print(f"  p99: {p99:.2f}ms")
@@ -171,7 +165,7 @@ class TestWALPerformance:
 
             def reader():
                 try:
-                    items = store.list_open_work_items("default")
+                    store.list_open_work_items("default")
                     elapsed = time.perf_counter()
                     read_latencies.append((time.perf_counter() - elapsed) * 1000)
                 except Exception as e:
@@ -202,7 +196,7 @@ class TestWALPerformance:
             assert not errors, f"WAL errors: {errors}"
 
             if write_latencies:
-                print(f"\nWAL concurrent performance:")
+                print("\nWAL concurrent performance:")
                 print(f"  Write p50: {_percentile(sorted(write_latencies), 50):.2f}ms")
                 print(f"  Write p99: {_percentile(sorted(write_latencies), 99):.2f}ms")
 
@@ -282,6 +276,6 @@ class TestDedupPerformance:
         # Dedup shouldn't add more than 50ms at p99
         assert p99 < 150, f"Dedup p99 latency {p99:.2f}ms exceeds 150ms threshold"
 
-        print(f"\nDedup latency (200 similar texts):")
+        print("\nDedup latency (200 similar texts):")
         print(f"  p50: {_percentile(latencies, 50):.2f}ms")
         print(f"  p99: {p99:.2f}ms")

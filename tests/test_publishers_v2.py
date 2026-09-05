@@ -22,28 +22,24 @@ import hmac
 import json
 import threading
 import time
-from datetime import datetime, timezone
 
 import pytest
-from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
+from aftergraph_work_intelligence.models import (
+    Observation,
+    WorkItem,
+    WorkItemDetail,
+    utc_now,
+)
+from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.publishers import (
     RenosPublisher,
     WebhookPublisher,
     WorksPublisher,
     build_publish_router,
 )
-from aftergraph_work_intelligence.models import (
-    Observation,
-    ObservationInput,
-    WorkItem,
-    WorkItemDetail,
-    utc_now,
-)
-from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
-
 
 # ---------------- helpers ----------------
 
@@ -149,8 +145,9 @@ def test_webhook_publisher_posts_signed_payload_and_returns_external_id():
         pass
 
     # Use real HTTP via uvicorn in a thread.
-    import uvicorn
     import socket
+
+    import uvicorn
 
     # Find free port
     sock = socket.socket()
@@ -187,9 +184,14 @@ def test_webhook_publisher_posts_signed_payload_and_returns_external_id():
 
 def test_renos_publisher_creates_job_in_real_http_round_trip():
     app, jobs = _make_fake_renos()
-    import uvicorn, socket
+    import socket
 
-    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+    import uvicorn
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -214,9 +216,14 @@ def test_renos_publisher_creates_job_in_real_http_round_trip():
 
 def test_works_publisher_posts_conformant_work_payload():
     app, works = _make_fake_works()
-    import uvicorn, socket
+    import socket
 
-    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+    import uvicorn
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)
@@ -248,9 +255,14 @@ def test_works_publisher_posts_conformant_work_payload():
 
 def test_publish_router_dispatches_by_destination_and_enforces_tenant_policy():
     app, _jobs = _make_fake_renos()
-    import uvicorn, socket
+    import socket
 
-    sock = socket.socket(); sock.bind(("127.0.0.1", 0)); port = sock.getsockname()[1]; sock.close()
+    import uvicorn
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
     config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(config)
     thread = threading.Thread(target=server.run, daemon=True)

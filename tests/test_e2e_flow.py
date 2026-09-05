@@ -15,25 +15,18 @@ It also verifies that:
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
-import os
 import socket
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException
 
 from aftergraph_work_intelligence.adapters import (
-    CalendarAdapter,
     ConversationAdapter,
     EmailAdapter,
-    RenosAdapter,
 )
 from aftergraph_work_intelligence.models import ObservationInput, utc_now
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
@@ -46,12 +39,15 @@ from aftergraph_work_intelligence.service import WorkIntelligenceService
 from aftergraph_work_intelligence.store import SQLiteStore
 from aftergraph_work_intelligence.transitions import TransitionEngine
 
-
 # ---------------- fakes ----------------
 
 
 def _free_port() -> int:
-    s = socket.socket(); s.bind(("127.0.0.1", 0)); p = s.getsockname()[1]; s.close(); return p
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
 
 
 def _start(app: FastAPI, port: int):
@@ -99,7 +95,7 @@ def _make_works_app() -> tuple[FastAPI, list]:
 def test_full_flow_signal_to_evidence(tmp_path):
     """Full canonical flow: adapters → service → policy gate → review →
     publish (RenOS) → WORKS promotion → evidence."""
-    renos_app, renos_jobs = _make_renos_app()
+    renos_app, _ = _make_renos_app()
     works_app, works_store = _make_works_app()
     renos_port = _free_port()
     works_port = _free_port()

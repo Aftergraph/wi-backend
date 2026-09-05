@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.api import create_app
-from aftergraph_work_intelligence.tasks import TaskQueue, TaskStatus, create_task_queue
+from aftergraph_work_intelligence.tasks import TaskQueue, TaskStatus
 
 
 @pytest.fixture()
@@ -78,8 +78,8 @@ class TestTaskQueue:
     def test_list_tasks(self):
         q = TaskQueue(max_workers=1)
         q.register("noop", lambda: None)
-        t1 = q.submit("noop")
-        t2 = q.submit("noop")
+        q.submit("noop")
+        q.submit("noop")
         time.sleep(0.5)
         all_tasks = q.list_tasks()
         assert len(all_tasks) >= 2

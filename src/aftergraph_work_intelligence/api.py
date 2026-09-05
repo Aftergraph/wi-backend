@@ -1,42 +1,55 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import hashlib as _hashlib
+import hmac as _hmac
 import json
 import logging
 import os
 import sys
+import threading as _threading
 import time
+import urllib.request
 import uuid
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import (
+    APIRouter,
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
-import uuid
 
+from .audit import AuditLog
+from .body_log import BodyLoggingMiddleware
+from .cache import Cache
 from .evidence import build_evidence
+from .exceptions import WorkIntelligenceError
 from .metrics import MetricsRecorder
+from .migrations import run_migrations
 from .models import ObservationInput, Publication, utc_now
 from .policy import PolicyStore, TenantPolicy
 from .publishers import Publisher, publisher_from_env
-from .service import WorkIntelligenceService
-from .tasks import create_task_queue, TaskStatus
-from .audit import AuditLog
-from .cache import Cache, app_cache
 from .request_logger import RequestLogger
-from .body_log import BodyLoggingMiddleware
-from .tracing import setup_tracing
-from .exceptions import WorkIntelligenceError
-from .migrations import run_migrations
+from .service import WorkIntelligenceService
 from .store import SQLiteStore
+from .tasks import TaskStatus, create_task_queue
+from .tracing import setup_tracing
 from .transitions import TransitionEngine
 
 
@@ -48,7 +61,7 @@ def _dt(value: str) -> datetime:
 class JSONFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -74,11 +87,6 @@ def setup_logging():
 
 
 logger = logging.getLogger("aftergraph.work-intelligence")
-
-
-import threading as _threading
-import hashlib as _hashlib
-import hmac as _hmac
 
 
 def _fire_webhooks(app_state, event: str, payload: dict) -> None:
@@ -107,7 +115,6 @@ def _fire_webhooks(app_state, event: str, payload: dict) -> None:
                 headers["X-Webhook-Signature"] = f"sha256={sig}"
             for attempt in range(3):
                 try:
-                    import urllib.request
                     req = urllib.request.Request(url, data=body, headers=headers, method="POST")
                     urllib.request.urlopen(req, timeout=5)
                     break
@@ -121,7 +128,8 @@ def _fire_webhooks(app_state, event: str, payload: dict) -> None:
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(broadcast_update(event, payload))
+            _task = loop.create_task(broadcast_update(event, payload))
+            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
     except Exception:
         pass
 
@@ -129,6 +137,25 @@ def _fire_webhooks(app_state, event: str, payload: dict) -> None:
     stats = getattr(app_state, "webhook_stats", {"delivered": 0, "failed": 0})
     stats["delivered"] += 1
     app_state.webhook_stats = stats
+
+
+# --- WebSocket broadcast (module-level so _fire_webhooks and app share it) ---
+ws_clients: set = set()
+ws_last_heartbeat: dict = {}  # client -> timestamp
+
+async def broadcast_update(event: str, data: dict):
+    """Broadcast update to all connected WebSocket clients."""
+    if not ws_clients:
+        return
+    message = json.dumps({"event": event, "data": data})
+    dead = set()
+    for ws in ws_clients:
+        try:
+            await ws.send_text(message)
+        except Exception:
+            dead.add(ws)
+    for ws in dead:
+        ws_clients.discard(ws)
 
 
 class RateLimiter:
@@ -552,15 +579,6 @@ Production-grade observation → WorkItem inference engine.
         _fire_webhooks(request.app.state, "observation.ingested", encoded)
         return JSONResponse(status_code=status, content=encoded)
 
-    @router.get("/work-items", dependencies=[Depends(auth)])
-    def list_work_items(
-        tenant_id: str = Query(min_length=1, max_length=128),
-        limit: int = Query(default=100, ge=1, le=1000),
-        svc: WorkIntelligenceService = Depends(service),
-    ):
-        items = svc.list_work_items(tenant_id, limit)
-        return {"count": len(items), "work_items": jsonable_encoder([asdict(item) for item in items])}
-
     @router.get("/work-items/{work_item_id}", dependencies=[Depends(auth)])
     def get_work_item(
         work_item_id: str,
@@ -800,7 +818,7 @@ Production-grade observation → WorkItem inference engine.
                 "disk_total_gb": round(disk.total / (1024**3), 2),
             },
             "service": service_metrics,
-            "timestamp": datetime.utcnow().isoformat() + "Z"
+            "timestamp": datetime.now(UTC).isoformat() + "Z"
         }
 
 
@@ -1073,7 +1091,7 @@ Production-grade observation → WorkItem inference engine.
         return {
             "status": "pass" if all_pass else "fail",
             "checks": checks,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
     @router.get("/work-items/{work_item_id}/actions", dependencies=[Depends(auth)])
@@ -1171,7 +1189,7 @@ Production-grade observation → WorkItem inference engine.
         return {
             "status": "healthy" if all_ok else "degraded",
             "checks": checks,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
 
     # --- Readiness Probe ---
@@ -1190,7 +1208,6 @@ Production-grade observation → WorkItem inference engine.
     @app.get("/live")
     def live():
         """Kubernetes liveness probe."""
-        import time as _time
         return {
             "status": "alive",
             "uptime_seconds": 0,  # Would need to track startup time
@@ -1263,10 +1280,6 @@ Production-grade observation → WorkItem inference engine.
 
 
     # --- WebSocket for real-time updates ---
-    import asyncio
-
-    ws_clients: set = set()
-    ws_last_heartbeat: dict = {}  # client -> timestamp
 
     async def ws_heartbeat_loop():
         """Send heartbeat pings to all connected clients every 30s."""
@@ -1304,19 +1317,6 @@ Production-grade observation → WorkItem inference engine.
             ws_clients.discard(websocket)
             ws_last_heartbeat.pop(id(websocket), None)
 
-    async def broadcast_update(event: str, data: dict):
-        """Broadcast update to all connected WebSocket clients."""
-        if not ws_clients:
-            return
-        message = json.dumps({"event": event, "data": data})
-        dead = set()
-        for ws in ws_clients:
-            try:
-                await ws.send_text(message)
-            except Exception:
-                dead.add(ws)
-        ws_clients -= dead
-
     # --- Webhook Management ---
     @router.post("/webhooks", status_code=201, dependencies=[Depends(auth)])
     def register_webhook(
@@ -1339,7 +1339,7 @@ Production-grade observation → WorkItem inference engine.
             "url": url,
             "events": events,
             "secret": secret,
-            "created_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": datetime.now(UTC).isoformat() + "Z",
             "active": True,
         }
         

@@ -14,33 +14,30 @@ FLOW: signal → observation → candidate → resolution → WorkItem
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timezone
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from aftergraph_work_intelligence.evidence import build_evidence, verify_evidence
-from aftergraph_work_intelligence.models import ObservationInput, utc_now
+from aftergraph_work_intelligence.models import ObservationInput
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.publishers import (
     PublishRouter,
     RenosPublisher,
-    WorksPublisher,
     _build_works_payload,
 )
 from aftergraph_work_intelligence.service import WorkIntelligenceService
 from aftergraph_work_intelligence.store import SQLiteStore
 from aftergraph_work_intelligence.transitions import TransitionEngine
-
 
 # ---------- helpers ----------
 
@@ -353,7 +350,7 @@ class TestWorksSchemaConformance:
 
         assert "nodes" in payload["graph"]
         assert len(payload["graph"]["nodes"]) >= 1
-        first_node = list(payload["graph"]["nodes"].values())[0]
+        first_node = next(iter(payload["graph"]["nodes"].values()))
         assert "kind" in first_node
 
         store.close()

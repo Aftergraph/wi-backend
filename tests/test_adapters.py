@@ -11,9 +11,7 @@ service exposing the relevant endpoints.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC, datetime
 
 from aftergraph_work_intelligence.adapters import (
     CalendarAdapter,
@@ -22,8 +20,6 @@ from aftergraph_work_intelligence.adapters import (
     EmailAdapter,
     RenosAdapter,
 )
-from aftergraph_work_intelligence.models import ObservationInput
-
 
 # ---------- Conversation ----------
 
@@ -49,7 +45,7 @@ def test_conversation_adapter_keeps_canonical_provenance():
     assert o.source == "conversation"
     assert o.actor == "user:empir"
     assert o.external_id == "transcript-2026-09-05-001:msg:2"
-    assert o.occurred_at == datetime(2026, 9, 5, 9, 0, tzinfo=timezone.utc)
+    assert o.occurred_at == datetime(2026, 9, 5, 9, 0, tzinfo=UTC)
     assert o.metadata["transcript_id"] == "transcript-2026-09-05-001"
     assert o.metadata["speaker"] == "user"
 

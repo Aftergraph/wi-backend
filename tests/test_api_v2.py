@@ -12,9 +12,6 @@ exercise the real HTTP surface without external services.
 """
 from __future__ import annotations
 
-import json
-
-import pytest
 from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.api import create_app

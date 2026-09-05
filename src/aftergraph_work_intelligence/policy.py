@@ -18,7 +18,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-
 _PRIORITY_RANK = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 
@@ -149,4 +148,4 @@ def merge_policy(base: TenantPolicy, override: TenantPolicy) -> TenantPolicy:
     )
 
 
-__all__ = ["TenantPolicy", "PolicyDecision", "PolicyStore", "merge_policy"]
+__all__ = ["PolicyDecision", "PolicyStore", "TenantPolicy", "merge_policy"]

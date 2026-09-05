@@ -22,15 +22,13 @@ A downstream auditor can verify the digest given the canonical payload.
 """
 from __future__ import annotations
 
-import copy
 import hashlib
 import hmac
 import json
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-
 
 _EVIDENCE_SCHEMA = "aftergraph.work-item-evidence/1.0"
 
@@ -66,7 +64,7 @@ def _canonical_payload(payload: dict[str, Any]) -> bytes:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass(slots=True)

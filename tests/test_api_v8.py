@@ -233,7 +233,7 @@ class TestErrorHandling:
     def test_api_key_lifecycle(self, client):
         resp = client.post("/v1/api-keys", json={"name": "test-key"}, headers=AUTH)
         assert resp.status_code == 201
-        key = resp.json()["key"]
+        resp.json()["key"]
 
         resp = client.get("/v1/api-keys", headers=AUTH)
         assert resp.status_code == 200

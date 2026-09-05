@@ -17,30 +17,22 @@ Evaluation metrics collected:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any
-
-import pytest
+from typing import Any, ClassVar
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from aftergraph_work_intelligence.adapters import RenosAdapter
 from aftergraph_work_intelligence.evidence import build_evidence, verify_evidence
 from aftergraph_work_intelligence.metrics import MetricsRecorder
 from aftergraph_work_intelligence.models import ObservationInput, utc_now
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.service import WorkIntelligenceService
 from aftergraph_work_intelligence.store import SQLiteStore
-
 
 # ---------- shadow mode infrastructure ----------
 
@@ -308,8 +300,8 @@ class TestShadowDogfood:
             "source_coverage", "total_errors",
             "avg_latency_ms", "p99_latency_ms",
         ]
-        for field in required_fields:
-            assert field in snap, f"Missing metric field: {field}"
+        for f in required_fields:
+            assert f in snap, f"Missing metric field: {f}"
 
         assert snap["signals_received"] == 1
         assert snap["total_errors"] == 0
@@ -364,7 +356,7 @@ class TestShadowDogfood:
         bad_job = {"id": "bad-job", "title": "", "description": ""}
 
         # Should not crash — error is recorded
-        envelope = pipeline.observe_renos_job(bad_job)
+        pipeline.observe_renos_job(bad_job)
         # Empty text may or may not create a work item depending on extractor
         # But it should not crash
 
@@ -381,7 +373,7 @@ class TestShadowDogfood:
 class TestEvaluationMetrics:
     """Compare achieved metrics against target thresholds from research protocol."""
 
-    TARGETS = {
+    TARGETS: ClassVar[dict[str, float]] = {
         "min_work_item_creation_rate": 0.8,  # 80% of valid signals should create work items
         "min_dedup_accuracy": 0.9,  # 90% of replays should be detected
         "max_evidence_failure_rate": 0.0,  # 0% evidence verification failures
@@ -429,7 +421,7 @@ class TestEvaluationMetrics:
         # Dedup accuracy
         total_replays = snap["replays_detected"] + snap["work_items_created"] + snap["work_items_merged"]
         if total_replays > 0:
-            dedup_rate = snap["replays_detected"] / total_replays
+            snap["replays_detected"] / total_replays
             # At least some dedup should occur (we inserted a duplicate)
             assert snap["replays_detected"] >= 1, "Dedup should detect at least one replay"
 

@@ -183,7 +183,7 @@ class TestBulkOperations:
 
         if ids:
             resp = client.post(
-                f"/v1/work-items/bulk-status?tenant_id=default",
+                "/v1/work-items/bulk-status?tenant_id=default",
                 json={"work_item_ids": ids},
                 headers=AUTH,
             )
@@ -191,7 +191,7 @@ class TestBulkOperations:
 
     def test_bulk_status_with_invalid_ids(self, client):
         resp = client.post(
-            f"/v1/work-items/bulk-status?tenant_id=default",
+            "/v1/work-items/bulk-status?tenant_id=default",
             json={"work_item_ids": [str(uuid.uuid4())]},
             headers=AUTH,
         )
@@ -200,7 +200,7 @@ class TestBulkOperations:
 
     def test_bulk_status_empty_list(self, client):
         resp = client.post(
-            f"/v1/work-items/bulk-status?tenant_id=default",
+            "/v1/work-items/bulk-status?tenant_id=default",
             json={"work_item_ids": []},
             headers=AUTH,
         )

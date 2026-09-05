@@ -4,8 +4,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.api import create_app
-from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
-from aftergraph_work_intelligence.service import WorkIntelligenceService
 
 
 @pytest.fixture()

@@ -18,7 +18,7 @@ class MetricsRecorder:
         self._store = store
 
     @classmethod
-    def from_store(cls, store: SQLiteStore) -> "MetricsRecorder":
+    def from_store(cls, store: SQLiteStore) -> MetricsRecorder:
         return cls(store)
 
     def snapshot(self) -> dict[str, Any]:

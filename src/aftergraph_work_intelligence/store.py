@@ -4,7 +4,7 @@ import json
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -124,8 +124,8 @@ ON api_keys(prefix);
 
 def _iso(value: datetime) -> str:
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc).isoformat()
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(UTC).isoformat()
 
 
 def _dt(value: str) -> datetime:
@@ -185,7 +185,7 @@ class SQLiteStore:
         require_approval_for_promotion: bool,
     ) -> None:
         """Insert or update a tenant policy."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             self._db.execute(
                 """
@@ -255,7 +255,7 @@ class SQLiteStore:
 
     def create_api_key(self, key_id: str, name: str, key_hash: str, prefix: str) -> dict:
         """Create an API key record."""
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
         with self._lock:
             self._db.execute(
                 """INSERT INTO api_keys (id, name, key_hash, prefix, active, created_at)
@@ -290,7 +290,7 @@ class SQLiteStore:
                 return False
             self._db.execute(
                 "UPDATE api_keys SET last_used_at = ? WHERE prefix = ?",
-                (datetime.now(timezone.utc).isoformat(), prefix),
+                (datetime.now(UTC).isoformat(), prefix),
             )
             return True
 

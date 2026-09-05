@@ -15,10 +15,6 @@ still persisted (so we never lose signal) but no work-item is created.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-import pytest
-
 from aftergraph_work_intelligence.models import ObservationInput
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.service import WorkIntelligenceService
@@ -121,7 +117,6 @@ def test_policy_works_promotion_default_disallowed(tmp_path):
         tenant_id="renos", source="conversation",
         text="Vi skal sende en bekræftelse",
     )).work_item.id
-    from aftergraph_work_intelligence.policy import PolicyDecision
     decision = svc.policy_store.evaluate_works_promotion("renos", item_id)
     assert decision.allowed is False
     assert "allow_works" in decision.reason or "policy" in decision.reason.lower()

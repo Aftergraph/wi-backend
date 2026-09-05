@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from .models import ObservationInput
 
@@ -26,8 +26,8 @@ def _parse_iso(value: str) -> datetime:
         value = value[:-1] + "+00:00"
     dt = datetime.fromisoformat(value)
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 class SourceAdapter(ABC):
@@ -67,7 +67,7 @@ class ConversationAdapter(SourceAdapter):
             return
         transcript_id = payload.get("transcript_id") or ""
         actor = payload.get("actor")
-        default_at = _parse_iso(payload["occurred_at"]) if payload.get("occurred_at") else datetime.now(timezone.utc)
+        default_at = _parse_iso(payload["occurred_at"]) if payload.get("occurred_at") else datetime.now(UTC)
         for idx, msg in enumerate(payload.get("messages") or []):
             text = (msg.get("text") or "").strip()
             if not text:
@@ -119,7 +119,7 @@ class EmailAdapter(SourceAdapter):
                 text=body,
                 external_id=msg.get("message_id"),
                 actor=msg.get("from"),
-                occurred_at=_parse_iso(received_at) if received_at else datetime.now(timezone.utc),
+                occurred_at=_parse_iso(received_at) if received_at else datetime.now(UTC),
                 title_hint=msg.get("subject"),
                 metadata={
                     "mailbox": mailbox,
@@ -159,7 +159,7 @@ class CalendarAdapter(SourceAdapter):
                 text=text,
                 external_id=event_id,
                 actor=attendees[0] if attendees else None,
-                occurred_at=_parse_iso(starts_at) if starts_at else datetime.now(timezone.utc),
+                occurred_at=_parse_iso(starts_at) if starts_at else datetime.now(UTC),
                 title_hint=f"Forbered {title} ({when})" if title and when else None,
                 priority_hint="medium" if attendees else "low",
                 metadata={
@@ -201,14 +201,14 @@ class CodeAdapter(SourceAdapter):
             message = commit.get("message") or ""
             repo = commit.get("repo") or ""
             committed_at = commit.get("committed_at")
-            occurred_at = _parse_iso(committed_at) if committed_at else datetime.now(timezone.utc)
+            occurred_at = _parse_iso(committed_at) if committed_at else datetime.now(UTC)
             todo_idx = 0
             for idx, line in enumerate(message.splitlines()):
                 line = line.strip()
                 if not line:
                     continue
                 upper = line.upper()
-                if not any(upper.startswith(f"{tag}:") or upper.startswith(f"{tag} ") for tag in self._TODO_RE):
+                if not any(upper.startswith((f"{tag}:", f"{tag} ")) for tag in self._TODO_RE):
                     continue
                 yield ObservationInput(
                     tenant_id=tenant_id,
@@ -248,7 +248,7 @@ class RenosAdapter(SourceAdapter):
 
     source = "renos"
 
-    _DONE_STATUSES = {"completed", "done", "cancelled"}
+    _DONE_STATUSES: ClassVar[frozenset[str]] = frozenset({"completed", "done", "cancelled"})
 
     def observations(self, payload: dict[str, Any]) -> Iterable[ObservationInput]:
         tenant_id = payload.get("tenant_id")
@@ -256,7 +256,7 @@ class RenosAdapter(SourceAdapter):
             return
         company_id = payload.get("company_id")
         as_of_str = payload.get("as_of")
-        as_of = _parse_iso(as_of_str) if as_of_str else datetime.now(timezone.utc)
+        as_of = _parse_iso(as_of_str) if as_of_str else datetime.now(UTC)
         for job in payload.get("jobs") or []:
             status = (job.get("status") or "").lower()
             scheduled_end = job.get("scheduled_end")
@@ -289,10 +289,10 @@ class RenosAdapter(SourceAdapter):
 
 
 __all__ = [
-    "SourceAdapter",
-    "ConversationAdapter",
-    "EmailAdapter",
     "CalendarAdapter",
     "CodeAdapter",
+    "ConversationAdapter",
+    "EmailAdapter",
     "RenosAdapter",
+    "SourceAdapter",
 ]

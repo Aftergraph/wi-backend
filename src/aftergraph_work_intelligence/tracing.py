@@ -23,10 +23,13 @@ def setup_tracing(app: FastAPI) -> None:
 
     try:
         from opentelemetry import trace
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.sdk.resources import SERVICE_NAME, Resource
         from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
-        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+            ConsoleSpanExporter,
+        )
 
         service_name = os.getenv("OTEL_SERVICE_NAME", "aftergraph-work-intelligence")
         exporter_type = os.getenv("OTEL_EXPORTER_TYPE", "otlp")
@@ -39,7 +42,9 @@ def setup_tracing(app: FastAPI) -> None:
 
         # Add exporter
         if exporter_type == "otlp":
-            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+            from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                OTLPSpanExporter,
+            )
             endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
             exporter = OTLPSpanExporter(endpoint=endpoint)
         elif exporter_type == "console":

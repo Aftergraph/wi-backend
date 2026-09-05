@@ -22,12 +22,12 @@ import json
 import os
 import urllib.error
 import urllib.request
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Mapping
+from typing import Any
 
 from .models import Observation, WorkItem
-
 
 # ---------- exceptions ----------
 
@@ -110,7 +110,7 @@ class WebhookPublisher(Publisher):
         if self.secret:
             digest = hmac.new(self.secret, body, hashlib.sha256).hexdigest()
             headers["X-Aftergraph-Signature"] = f"sha256={digest}"
-        status, parsed = _http_post_json(url, payload, headers, self.timeout_s)
+        _, parsed = _http_post_json(url, payload, headers, self.timeout_s)
         external_id = parsed.get("id") or parsed.get("external_id") or parsed.get("ticket_id")
         return PublishReceipt(destination=destination, external_id=str(external_id) if external_id is not None else None, response=parsed if isinstance(parsed, dict) else {"body": parsed})
 
@@ -176,7 +176,7 @@ class RenosPublisher(Publisher):
                 "aftergraph_actor": observations[0].actor if observations else None,
             },
         }
-        status, parsed = _http_post_json(url, body, {"User-Agent": "aftergraph-work-intelligence/0.2"}, self.timeout_s)
+        _, parsed = _http_post_json(url, body, {"User-Agent": "aftergraph-work-intelligence/0.2"}, self.timeout_s)
         external_id = parsed.get("id") if isinstance(parsed, dict) else None
         return PublishReceipt(destination=self.destination, external_id=external_id, response=parsed if isinstance(parsed, dict) else {"body": parsed})
 
@@ -272,7 +272,7 @@ class WorksPublisher(Publisher):
             raise KeyError(f"works publisher cannot handle destination: {destination}")
         url = f"{self.base_url}/work"
         payload = _build_works_payload(work_item, observations)
-        status, parsed = _http_post_json(
+        _, parsed = _http_post_json(
             url, payload, {"User-Agent": "aftergraph-work-intelligence/0.2"}, self.timeout_s
         )
         external_id = parsed.get("id") if isinstance(parsed, dict) else None
@@ -334,13 +334,13 @@ def build_publish_router(destinations: dict[str, Publisher], policy_store=None) 
 
 
 __all__ = [
-    "Publisher",
-    "WebhookPublisher",
-    "RenosPublisher",
-    "WorksPublisher",
-    "PublishRouter",
-    "PublishReceipt",
     "DestinationNotAllowed",
-    "publisher_from_env",
+    "PublishReceipt",
+    "PublishRouter",
+    "Publisher",
+    "RenosPublisher",
+    "WebhookPublisher",
+    "WorksPublisher",
     "build_publish_router",
+    "publisher_from_env",
 ]

@@ -16,9 +16,6 @@ from __future__ import annotations
 
 import io
 import json
-import logging
-
-import pytest
 
 from aftergraph_work_intelligence.evidence import (
     EvidenceBuilder,
@@ -26,9 +23,8 @@ from aftergraph_work_intelligence.evidence import (
     verify_evidence,
 )
 from aftergraph_work_intelligence.metrics import MetricsRecorder
-from aftergraph_work_intelligence.observability import configure_logging, log_event
 from aftergraph_work_intelligence.models import ObservationInput
-from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
+from aftergraph_work_intelligence.observability import configure_logging, log_event
 from aftergraph_work_intelligence.service import WorkIntelligenceService
 from aftergraph_work_intelligence.store import SQLiteStore
 

@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 
 class RequestLogger:
@@ -26,9 +24,11 @@ class RequestLogger:
 
     def _rotate_log(self) -> None:
         """Rotate to a new log file."""
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         log_path = self.log_dir / f"requests_{timestamp}.jsonl"
-        self._current_file = open(log_path, "a", encoding="utf-8")
+        # SIM115-ok: the file handle is intentionally kept open across
+        # requests; ownership is tracked by _current_file and closed in close().
+        self._current_file = open(log_path, "a", encoding="utf-8")  # noqa: SIM115
         self._current_size = 0
 
     def _check_rotate(self) -> None:
@@ -51,7 +51,7 @@ class RequestLogger:
     ) -> None:
         """Log a request/response pair."""
         entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "method": method,
             "path": path,
             "status_code": status_code,
@@ -86,7 +86,7 @@ class RequestLogger:
         try:
             log_files = sorted(self.log_dir.glob("requests_*.jsonl"), reverse=True)
             for log_file in log_files[:1]:
-                with open(log_file, "r", encoding="utf-8") as f:
+                with open(log_file, encoding="utf-8") as f:
                     lines = f.readlines()
                     for line in reversed(lines[-limit:]):
                         try:

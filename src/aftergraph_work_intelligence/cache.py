@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -69,7 +70,6 @@ class Cache:
 
     def _evict(self) -> None:
         """Evict expired entries, then oldest by access count."""
-        now = time.time()
         expired = [k for k, v in self._store.items() if v.is_expired]
         for k in expired:
             del self._store[k]

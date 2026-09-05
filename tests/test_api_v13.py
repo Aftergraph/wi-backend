@@ -97,10 +97,7 @@ class TestSecurity:
             ("GET", "/v1/api-keys"),
         ]
         for method, path in endpoints:
-            if method == "POST":
-                resp = client.post(path, json={})
-            else:
-                resp = client.get(path)
+            resp = client.post(path, json={}) if method == "POST" else client.get(path)
             assert resp.status_code == 401, f"{method} {path} should require auth"
 
     def test_invalid_token_rejected(self, client):

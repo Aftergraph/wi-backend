@@ -196,7 +196,7 @@ class TestErrorResponseConsistency:
             f"/v1/api-keys/{uuid.uuid4()}",
         ]
         for path in paths:
-            resp = client.get(path, headers=AUTH) if "webhooks" in path or "api-keys" in path else client.get(path, headers=AUTH)
+            resp = client.get(path, headers=AUTH)
             # Some paths may return 405 if wrong method
             assert resp.status_code in (404, 405), f"{path} returned {resp.status_code}"
 

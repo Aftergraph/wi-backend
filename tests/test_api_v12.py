@@ -59,7 +59,7 @@ class TestObservationHandling:
         text = "Vi skal købe 5 licenser hurtigt"
         
         # First observation
-        resp1 = client.post("/v1/observations", json={
+        client.post("/v1/observations", json={
             "tenant_id": "default",
             "source": "manual",
             "text": text,
@@ -212,7 +212,7 @@ class TestWorkItemOperations:
 
         if ids:
             resp = client.post(
-                f"/v1/work-items/bulk-status?tenant_id=default",
+                "/v1/work-items/bulk-status?tenant_id=default",
                 json={"work_item_ids": ids},
                 headers=AUTH,
             )

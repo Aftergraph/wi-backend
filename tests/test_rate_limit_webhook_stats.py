@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from aftergraph_work_intelligence.api import create_app, RateLimiter
+from aftergraph_work_intelligence.api import RateLimiter, create_app
 
 
 @pytest.fixture()
