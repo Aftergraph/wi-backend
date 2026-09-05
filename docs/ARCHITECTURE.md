@@ -62,6 +62,8 @@
 
 1. **Source event** happens (GitHub push, email, meeting, Slack decision, RenOS job)
 2. **Adapter** calls `POST /v1/observations` with `{source, text, actor, ...}`
+   — GitHub events arrive via `POST /v1/webhook/github` (HMAC-SHA256 verified,
+   mapped through `GitHubAdapter`, then ingested identically)
 3. **Extractor** normalizes the raw signal
 4. **Inferencer** predicts intent, priority, confidence
 5. **Canonicalizer** dedups via SHA-256 token key → creates or merges a `WorkItem`
@@ -94,7 +96,10 @@
 ┌─────────────────────────── VDS ───────────────────────────────┐
 │  works-execution bridge (works-api :18191)                    │
 │    └─ 3× avc-core workers (Docker sandbox node22+py3)         │
-│    └─ GitHub webhook → /v1/webhook/github                     │
+│  GitHub webhook → POST /v1/webhook/github                │
+│    ├─ X-Hub-Signature-256 (HMAC-SHA256 verification)     │
+│    ├─ GitHubAdapter.observations(payload)                │
+│    └─ WorkIntelligenceService.ingest(obs)                │
 │                                                               │
 │  work-intelligence backend (FastAPI :8087)  ← future deploy   │
 │  work-intelligence frontend (Vite/static)  ← future deploy    │

@@ -12,7 +12,7 @@ import threading as _threading
 import time
 import urllib.request
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import datetime, UTC
@@ -57,6 +57,19 @@ from .transitions import TransitionEngine
 def _dt(value: str) -> datetime:
     """Convert ISO string to datetime."""
     return datetime.fromisoformat(value)
+
+
+def _derive_source(store: SQLiteStore, work_item_id: str) -> str:
+    """Derive the canonical source for a work item from its linked observations.
+
+    Returns the most common source among linked observations, or 'unknown'
+    when the work item has no linked observations.
+    """
+    observations = store.observations_for_work_item(work_item_id)
+    if not observations:
+        return "unknown"
+    counts = Counter(o.source for o in observations)
+    return counts.most_common(1)[0][0]
 
 
 class JSONFormatter(logging.Formatter):
@@ -1009,6 +1022,7 @@ Production-grade observation → WorkItem inference engine.
         status: str | None = Query(default=None, max_length=64),
         priority: str | None = Query(default=None, max_length=64),
         limit: int = Query(default=100, ge=1, le=1000),
+        request: Request = None,
         svc: WorkIntelligenceService = Depends(service),
     ):
         """List work items with optional status and priority filtering (review queue)."""
@@ -1019,7 +1033,13 @@ Production-grade observation → WorkItem inference engine.
         # Filter by priority if provided
         if priority:
             items = [i for i in items if i.priority.lower() == priority.lower()]
-        return {"count": len(items), "work_items": jsonable_encoder([asdict(item) for item in items])}
+        store: SQLiteStore = request.app.state.store
+        out = []
+        for item in items:
+            d = asdict(item)
+            d["source"] = _derive_source(store, item.id)
+            out.append(d)
+        return {"count": len(out), "work_items": jsonable_encoder(out)}
 
     @router.get("/tenants/{tenant_id}/policy", dependencies=[Depends(auth)])
     def get_tenant_policy(

@@ -72,6 +72,46 @@ Auth: `Authorization: Bearer <api_key>` (SHA-256 hashed at rest).
 | GET/POST/DELETE | `/v1/tenants/{tenant_id}/policy` | Per-tenant policy CRUD |
 | GET | `/v1/tenants/policies` | All persisted policies |
 
+### Webhooks (inbound)
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/v1/webhook/github` | Inbound GitHub webhook — HMAC-SHA256 verified, maps via GitHubAdapter, ingests observations |
+
+**POST /v1/webhook/github**
+
+Ingests GitHub webhook events (push, pull_request, issues, check_run, workflow_run, issue_comment). Signature verification uses `X-Hub-Signature-256` header with HMAC-SHA256 against `AFTERGRAPH_GITHUB_WEBHOOK_SECRET`. If the secret is unset, verification is skipped (dev mode).
+
+**Headers:**
+
+| Header | Required | Description |
+|---|---|---|
+| `X-Hub-Signature-256` | Yes (prod) | `sha256=<hex>` HMAC-SHA256 of raw body |
+| `X-GitHub-Event` | No | Event type (defaults to `push`) |
+| `Content-Type` | Yes | `application/json` |
+
+**Request body:** Raw GitHub webhook payload JSON. Optional `tenant_id` field at root level (defaults to `"default"`).
+
+**Response (201 Created):**
+```json
+{
+  "event": "push",
+  "status": "ingested",
+  "observations_created": 2,
+  "observations_replayed": 0,
+  "work_item": {
+    "id": "wi_abc123",
+    "source": "github",
+    "priority": "medium",
+    "observation_count": 3
+  }
+}
+```
+
+**Response (202 Accepted):** Event ignored (no actionable observations).
+
+**Response (401 Unauthorized):** Invalid or missing signature.
+
 ### Webhooks (outbound)
 
 | Method | Path | Description |
