@@ -126,8 +126,10 @@ def publisher_from_env() -> Publisher | None:
         for dest in parsed:
             destinations[dest] = webhook
     works_url = os.getenv("AFTERGRAPH_WORKS_URL", "").strip()
-    if works_url:
-        destinations["works"] = WorksPublisher(works_url, token=os.getenv("AFTERGRAPH_WORKS_TOKEN", "").strip() or None)
+    works_secret = os.getenv("AFTERGRAPH_WORKS_ENROLL_SECRET", "").strip()
+    if works_url and works_secret:
+        destinations["works"] = WorksPublisher(works_url, enroll_secret=works_secret,
+                                               worker_id=os.getenv("AFTERGRAPH_WORKS_WORKER_ID", "wrkr_wi_publisher"))
     if not destinations:
         return None
     return build_publish_router(destinations)
@@ -268,26 +270,55 @@ class WorksPublisher(Publisher):
     (work.schema/1.0). Promotion is the operator's explicit action; this
     publisher is the wire to the durable execution plane.
 
-    Endpoint: ``POST {base_url}/v1/works`` with an optional Bearer token
-    (``AFTERGRAPH_WORKS_TOKEN``) — works-execution requires auth on create.
+    Works-execution authenticates producers with short-lived enrollment
+    JWTs (HS256, per-process key, default TTL 1h). This publisher enrolls
+    itself against ``POST {base_url}/v1/workers/enroll`` using the shared
+    challenge secret, then posts to ``POST {base_url}/v1/works`` with the
+    minted Bearer token. The token is cached per instance; products that
+    outlive the process key (works-api restart) re-enroll automatically.
     """
 
     destination = "works"
 
-    def __init__(self, base_url: str, token: str | None = None, timeout_s: float = 10.0):
+    def __init__(self, base_url: str, enroll_secret: str, worker_id: str = "wrkr_wi_publisher",
+                 ttl_seconds: int = 3000, timeout_s: float = 10.0):
         self.base_url = base_url.rstrip("/")
-        self.token = token
+        self.enroll_secret = enroll_secret
+        self.worker_id = worker_id
+        self.ttl_seconds = ttl_seconds
         self.timeout_s = timeout_s
+        self._token: str | None = None
+
+    def _enroll(self) -> str:
+        """Mint a fresh enrollment JWT from the control plane."""
+        url = f"{self.base_url}/v1/workers/enroll"
+        payload = {
+            "worker_id": self.worker_id,
+            "challenge": self.enroll_secret,
+            "ttl_seconds": self.ttl_seconds,
+        }
+        status, parsed = _http_post_json(url, payload, {"User-Agent": "aftergraph-work-intelligence/0.2"}, self.timeout_s)
+        if status != 200 or not isinstance(parsed, dict) or not parsed.get("token"):
+            raise RuntimeError(f"works enrollment failed (HTTP {status}): {parsed if isinstance(parsed, dict) else parsed!r}")
+        return str(parsed["token"])
 
     def publish(self, destination: str, work_item: WorkItem, observations: list[Observation]) -> PublishReceipt:
         if destination.casefold() != self.destination:
             raise KeyError(f"works publisher cannot handle destination: {destination}")
+        token = self._token or self._enroll()
         url = f"{self.base_url}/v1/works"
         payload = _build_works_payload(work_item, observations)
-        headers = {"User-Agent": "aftergraph-work-intelligence/0.2"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        headers = {
+            "User-Agent": "aftergraph-work-intelligence/0.2",
+            "Authorization": f"Bearer {token}",
+        }
         status, parsed = _http_post_json(url, payload, headers, self.timeout_s)
+        if status in (401, 403):
+            # Token stale (process key rotated / expired) — re-enroll once.
+            token = self._enroll()
+            headers["Authorization"] = f"Bearer {token}"
+            status, parsed = _http_post_json(url, payload, headers, self.timeout_s)
+        self._token = token
         external_id = parsed.get("id") if isinstance(parsed, dict) else None
         return PublishReceipt(destination=self.destination, external_id=external_id, response=parsed if isinstance(parsed, dict) else {"body": parsed})
 

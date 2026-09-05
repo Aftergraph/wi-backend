@@ -73,6 +73,7 @@ def _make_fake_works() -> tuple[FastAPI, list]:
     ``id, created_at, updated_at, source, objective, graph, requirements, policy, state``.
     The fake validates the minimum required fields and stores accepted works.
     """
+    ENROLL_SECRET = "test-enroll-secret"
     app = FastAPI(title="fake-works")
     works: list[dict] = []
 
@@ -83,6 +84,12 @@ def _make_fake_works() -> tuple[FastAPI, list]:
                 raise HTTPException(status_code=400, detail=f"missing required field: {required}")
         works.append(payload)
         return {"id": payload["id"], "state": payload.get("state", "CREATED")}
+
+    @app.post("/v1/workers/enroll")
+    def enroll(payload: dict):
+        if payload.get("challenge") != ENROLL_SECRET:
+            raise HTTPException(status_code=401, detail="bad challenge")
+        return {"token": "fake-jwt-token", "worker_id": payload.get("worker_id"), "scope": "worker"}
 
     @app.get("/v1/works")
     def list_works():
@@ -236,7 +243,7 @@ def test_works_publisher_posts_conformant_work_payload():
         deadline = time.time() + 5
         while time.time() < deadline and not server.started:
             time.sleep(0.05)
-        publisher = WorksPublisher(base_url=f"http://127.0.0.1:{port}")
+        publisher = WorksPublisher(base_url=f"http://127.0.0.1:{port}", enroll_secret="test-enroll-secret")
         receipt = publisher.publish("works", _make_work_item(), [_make_observation()])
         assert receipt.destination == "works"
         assert works, "no work submitted"
@@ -260,6 +267,7 @@ def test_works_publisher_posts_conformant_work_payload():
 def test_publisher_from_env_builds_router_with_works_destination(monkeypatch):
     """publisher_from_env must wire AFTERGRAPH_WORKS_URL into a router."""
     monkeypatch.setenv("AFTERGRAPH_WORKS_URL", "http://works-execution:18191")
+    monkeypatch.setenv("AFTERGRAPH_WORKS_ENROLL_SECRET", "test-enroll-secret")
     pub = publisher_from_env()
     assert pub is not None
     assert isinstance(pub, PublishRouter)
