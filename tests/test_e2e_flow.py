@@ -78,7 +78,13 @@ def _make_works_app() -> tuple[FastAPI, list]:
     app = FastAPI(title="fake-works")
     works: list[dict] = []
 
-    @app.post("/work")
+    @app.post("/v1/workers/enroll")
+    def enroll(payload: dict):
+        if payload.get("challenge") != "test-secret":
+            raise HTTPException(status_code=401, detail="bad challenge")
+        return {"token": "fake-jwt", "worker_id": payload.get("worker_id"), "scope": "worker"}
+
+    @app.post("/v1/works")
     def submit(payload: dict):
         for required in ("id", "created_at", "source", "objective", "graph", "state"):
             if required not in payload:
@@ -115,7 +121,7 @@ def test_full_flow_signal_to_evidence(tmp_path):
         router = build_publish_router(
             {
                 "renos": RenosPublisher(base_url=f"http://127.0.0.1:{renos_port}", company_id="company-abc"),
-                "works": WorksPublisher(base_url=f"http://127.0.0.1:{works_port}"),
+                "works": WorksPublisher(base_url=f"http://127.0.0.1:{works_port}", enroll_secret="test-secret"),
             },
             policy_store=policy_store,
         )
@@ -260,7 +266,7 @@ def test_policy_blocks_promotion_when_allow_works_false(tmp_path):
         router = build_publish_router(
             {
                 "renos": RenosPublisher(base_url=f"http://127.0.0.1:{renos_port}", company_id="co"),
-                "works": WorksPublisher(base_url=f"http://127.0.0.1:{works_port}"),
+                "works": WorksPublisher(base_url=f"http://127.0.0.1:{works_port}", enroll_secret="test-secret"),
             },
             policy_store=policy_store,
         )
