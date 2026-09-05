@@ -6,7 +6,6 @@ canonical ObservationInput instances — never WorkItems directly.
 """
 from __future__ import annotations
 
-
 from aftergraph_work_intelligence.adapters import GitHubAdapter, SourceAdapter
 
 

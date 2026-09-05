@@ -39,6 +39,9 @@ from .audit import AuditLog
 from .body_log import BodyLoggingMiddleware
 from .cache import Cache
 from .adapters import GitHubAdapter
+from .audit import AuditLog
+from .body_log import BodyLoggingMiddleware
+from .cache import Cache
 from .evidence import build_evidence
 from .exceptions import WorkIntelligenceError
 from .metrics import MetricsRecorder
@@ -101,6 +104,11 @@ def setup_logging():
 
 
 logger = logging.getLogger("aftergraph.work-intelligence")
+
+
+import hashlib as _hashlib
+import hmac as _hmac
+import threading as _threading
 
 
 def _fire_webhooks(app_state, event: str, payload: dict) -> None:

@@ -27,7 +27,10 @@ CONTRACT = Path(__file__).resolve().parent.parent / "contracts" / "work-intellig
 
 from aftergraph_work_intelligence.models import WorkItem, utc_now  # noqa: E402
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy  # noqa: E402
-from aftergraph_work_intelligence.publishers import DestinationNotAllowed, PublishRouter  # noqa: E402
+from aftergraph_work_intelligence.publishers import (  # noqa: E402
+    DestinationNotAllowed,
+    PublishRouter,
+)
 
 
 @pytest.fixture(scope="module")

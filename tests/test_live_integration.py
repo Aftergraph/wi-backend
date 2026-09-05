@@ -20,7 +20,7 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -86,7 +86,7 @@ def _renos_request(method, path, body=None):
 
 def _new_evidence_payload(**overrides):
     """Build a valid V5.1 evidence payload with defaults."""
-    now = datetime.now(UTC).isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     base = {
         "subjectType": "approval",
         "subjectId": str(uuid.uuid4()),
@@ -137,7 +137,7 @@ class TestLiveRenOSEvidence:
     def test_evidence_idempotency(self):
         """Posting same evidence twice yields same record (idempotent)."""
         subject_id = str(uuid.uuid4())
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         idempotency_key = f"live-idem-{uuid.uuid4().hex[:8]}"
         payload = {
             "subjectType": "agent_run",
@@ -228,7 +228,7 @@ class TestLiveCrossRepoFlow:
         engine.approve(work_item.id, actor="live-test-operator")
 
         # 3. Write evidence to real RenOS
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         evidence_subject_id = str(uuid.uuid4())
         status, resp = _renos_request("POST", "/api/operations/evidence", {
             "subjectType": "approval",
@@ -272,7 +272,7 @@ class TestLiveEvidenceIntegrity:
     def test_evidence_metadata_round_trip_via_renos(self):
         """Write evidence with metadata, read back, verify data integrity."""
         subject_id = str(uuid.uuid4())
-        now = datetime.now(UTC).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
 
         # Compute a content digest for integrity
         evidence_data = {

@@ -185,6 +185,7 @@ def test_webhook_publisher_posts_signed_payload_and_returns_external_id():
 def test_renos_publisher_creates_job_in_real_http_round_trip():
     app, jobs = _make_fake_renos()
     import socket
+    import uvicorn
 
     import uvicorn
 
@@ -217,6 +218,7 @@ def test_renos_publisher_creates_job_in_real_http_round_trip():
 def test_works_publisher_posts_conformant_work_payload():
     app, works = _make_fake_works()
     import socket
+    import uvicorn
 
     import uvicorn
 
@@ -256,6 +258,7 @@ def test_works_publisher_posts_conformant_work_payload():
 def test_publish_router_dispatches_by_destination_and_enforces_tenant_policy():
     app, _jobs = _make_fake_renos()
     import socket
+    import uvicorn
 
     import uvicorn
 
