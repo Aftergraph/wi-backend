@@ -76,7 +76,7 @@ def _make_fake_works() -> tuple[FastAPI, list]:
     app = FastAPI(title="fake-works")
     works: list[dict] = []
 
-    @app.post("/work")
+    @app.post("/v1/works")
     def submit_work(payload: dict):
         for required in ("id", "created_at", "source", "objective", "graph", "state"):
             if required not in payload:
@@ -84,7 +84,7 @@ def _make_fake_works() -> tuple[FastAPI, list]:
         works.append(payload)
         return {"id": payload["id"], "state": payload.get("state", "CREATED")}
 
-    @app.get("/work")
+    @app.get("/v1/works")
     def list_works():
         return {"works": works}
 

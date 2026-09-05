@@ -127,7 +127,7 @@ def publisher_from_env() -> Publisher | None:
             destinations[dest] = webhook
     works_url = os.getenv("AFTERGRAPH_WORKS_URL", "").strip()
     if works_url:
-        destinations["works"] = WorksPublisher(works_url)
+        destinations["works"] = WorksPublisher(works_url, token=os.getenv("AFTERGRAPH_WORKS_TOKEN", "").strip() or None)
     if not destinations:
         return None
     return build_publish_router(destinations)
@@ -267,22 +267,27 @@ class WorksPublisher(Publisher):
     The payload conforms to ``contracts/schemas/work.schema.schema.json``
     (work.schema/1.0). Promotion is the operator's explicit action; this
     publisher is the wire to the durable execution plane.
+
+    Endpoint: ``POST {base_url}/v1/works`` with an optional Bearer token
+    (``AFTERGRAPH_WORKS_TOKEN``) — works-execution requires auth on create.
     """
 
     destination = "works"
 
-    def __init__(self, base_url: str, timeout_s: float = 10.0):
+    def __init__(self, base_url: str, token: str | None = None, timeout_s: float = 10.0):
         self.base_url = base_url.rstrip("/")
+        self.token = token
         self.timeout_s = timeout_s
 
     def publish(self, destination: str, work_item: WorkItem, observations: list[Observation]) -> PublishReceipt:
         if destination.casefold() != self.destination:
             raise KeyError(f"works publisher cannot handle destination: {destination}")
-        url = f"{self.base_url}/work"
+        url = f"{self.base_url}/v1/works"
         payload = _build_works_payload(work_item, observations)
-        _, parsed = _http_post_json(
-            url, payload, {"User-Agent": "aftergraph-work-intelligence/0.2"}, self.timeout_s
-        )
+        headers = {"User-Agent": "aftergraph-work-intelligence/0.2"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        status, parsed = _http_post_json(url, payload, headers, self.timeout_s)
         external_id = parsed.get("id") if isinstance(parsed, dict) else None
         return PublishReceipt(destination=self.destination, external_id=external_id, response=parsed if isinstance(parsed, dict) else {"body": parsed})
 
