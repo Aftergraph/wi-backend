@@ -15,7 +15,7 @@ import uuid
 from collections import Counter, defaultdict
 from contextlib import asynccontextmanager
 from dataclasses import asdict
-from datetime import datetime, UTC
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -35,9 +35,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from .audit import AuditLog
-from .body_log import BodyLoggingMiddleware
-from .cache import Cache
 from .adapters import GitHubAdapter
 from .audit import AuditLog
 from .body_log import BodyLoggingMiddleware
@@ -106,9 +103,6 @@ def setup_logging():
 logger = logging.getLogger("aftergraph.work-intelligence")
 
 
-import hashlib as _hashlib
-import hmac as _hmac
-import threading as _threading
 
 
 def _fire_webhooks(app_state, event: str, payload: dict) -> None:
