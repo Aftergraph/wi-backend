@@ -242,7 +242,9 @@ def _build_works_payload(work_item: WorkItem, observations: list[Observation]) -
         "graph": {
             "nodes": {
                 "extract": {
+                    "id": "extract",
                     "kind": "extract",
+                    "run": "aftergraph-extract",
                     "input_source": "aftergraph.work_item",
                     "input_id": work_item.id,
                 }
