@@ -35,10 +35,12 @@ from aftergraph_work_intelligence.models import (
 )
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.publishers import (
+    PublishRouter,
     RenosPublisher,
     WebhookPublisher,
     WorksPublisher,
     build_publish_router,
+    publisher_from_env,
 )
 
 # ---------------- helpers ----------------
@@ -253,6 +255,21 @@ def test_works_publisher_posts_conformant_work_payload():
 
 
 # ---------------- PublishRouter ----------------
+
+
+def test_publisher_from_env_builds_router_with_works_destination(monkeypatch):
+    """publisher_from_env must wire AFTERGRAPH_WORKS_URL into a router."""
+    monkeypatch.setenv("AFTERGRAPH_WORKS_URL", "http://works-execution:18191")
+    pub = publisher_from_env()
+    assert pub is not None
+    assert isinstance(pub, PublishRouter)
+    # "works" destination must be dispatched to a WorksPublisher.
+    assert isinstance(pub._destinations["works"], WorksPublisher)
+    assert pub._destinations["works"].base_url == "http://works-execution:18191"
+
+
+def test_publisher_from_env_returns_none_without_config():
+    assert publisher_from_env() is None
 
 
 def test_publish_router_dispatches_by_destination_and_enforces_tenant_policy():

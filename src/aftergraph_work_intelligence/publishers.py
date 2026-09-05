@@ -117,12 +117,20 @@ class WebhookPublisher(Publisher):
 
 def publisher_from_env() -> Publisher | None:
     raw = os.getenv("AFTERGRAPH_PUBLISHERS_JSON", "").strip()
-    if not raw:
+    destinations: dict[str, Publisher] = {}
+    if raw:
+        parsed = json.loads(raw)
+        if not isinstance(parsed, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()):
+            raise ValueError("AFTERGRAPH_PUBLISHERS_JSON must be a JSON object of destination -> URL")
+        webhook = WebhookPublisher(parsed, secret=os.getenv("AFTERGRAPH_WEBHOOK_SECRET"))
+        for dest in parsed:
+            destinations[dest] = webhook
+    works_url = os.getenv("AFTERGRAPH_WORKS_URL", "").strip()
+    if works_url:
+        destinations["works"] = WorksPublisher(works_url)
+    if not destinations:
         return None
-    parsed = json.loads(raw)
-    if not isinstance(parsed, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in parsed.items()):
-        raise ValueError("AFTERGRAPH_PUBLISHERS_JSON must be a JSON object of destination -> URL")
-    return WebhookPublisher(parsed, secret=os.getenv("AFTERGRAPH_WEBHOOK_SECRET"))
+    return build_publish_router(destinations)
 
 
 # ---------- RenosPublisher ----------
