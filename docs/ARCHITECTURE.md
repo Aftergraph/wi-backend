@@ -94,14 +94,19 @@
 
 ```
 ┌─────────────────────────── VDS ───────────────────────────────┐
-│  works-execution bridge (works-api :18191)                    │
+│  works-execution bridge (works-api :18191, screen PID 2301671)│
 │    └─ 3× avc-core workers (Docker sandbox node22+py3)         │
 │  GitHub webhook → POST /v1/webhook/github                │
 │    ├─ X-Hub-Signature-256 (HMAC-SHA256 verification)     │
 │    ├─ GitHubAdapter.observations(payload)                │
 │    └─ WorkIntelligenceService.ingest(obs)                │
 │                                                               │
-│  work-intelligence backend (FastAPI :8087)  ← future deploy   │
-│  work-intelligence frontend (Vite/static)  ← future deploy    │
+│  work-intelligence backend (FastAPI :8090, systemd)      │
+│    └─ WorksPublisher → POST {works-url}/v1/workers/enroll     │
+│           └─ Bearer JWT → POST {works-url}/v1/works     │
+│  work-intelligence frontend (:3001, systemd, node server.mjs)│
+│    ├─ static SPA (dist/)                                  │
+│    └─ /api/* reverse-proxy → backend :8090                    │
+│       └─ publish/promote-knapper i Inspector (approved items) │
 └───────────────────────────────────────────────────────────────┘
 ```

@@ -112,6 +112,43 @@ Ingests GitHub webhook events (push, pull_request, issues, check_run, workflow_r
 
 **Response (401 Unauthorized):** Invalid or missing signature.
 
+### Work item lifecycle: publish & promote
+
+**POST /v1/work-items/{id}/publish?tenant_id=default**
+
+Publishes an APPROVED work item to an external destination (e.g. `works`). The publish router dispatches to the destination's concrete publisher; for `works`, the `WorksPublisher` self-enrolls via `POST {AFTERGRAPH_WORKS_URL}/v1/workers/enroll` (challenge = `AFTERGRAPH_WORKS_ENROLL_SECRET`, worker_id = `AFTERGRAPH_WORKS_WORKER_ID`), then POSTs the normalized Work payload to `{AFTERGRAPH_WORKS_URL}/v1/works` with the enrollment JWT as Bearer. On 401/403 it re-enrolls once automatically. `idempotency_key` is derived from the work item id so re-publishing yields the same external work id.
+
+**Request body (strict, no extra fields):**
+```json
+{ "destination": "works" }
+```
+
+**Response (201 Created):**
+```json
+{
+  "id": "pub_ff1086e04d5e4ffa88068c54403c2d6f",
+  "work_item_id": "wi_abc123",
+  "destination": "works",
+  "external_id": "works:435162063fff2970ec6144d6272dc568",
+  "response": { "id": "works:435162063fff2970ec6144d6272dc568", "state": "CREATED", "objective": { "type": "custom", "description": "...", "constraints": { "work_item_id": "wi_abc123" } }, "graph": { "nodes": { "extract": { "id": "extract", "kind": "extract", "run": "aftergraph-extract" } } } }
+}
+```
+
+**Response (502 Bad Gateway):** Destination unreachable/authorization failed — detail contains the upstream error (`bad_challenge` = enroll secret mismatch, `token_expired` = stale cached JWT; fix: point `AFTERGRAPH_WORKS_ENROLL_SECRET` at the *running* works-api process secret and restart).
+
+**POST /v1/work-items/{id}/promote?tenant_id=default**
+
+Promotes a work item to the works-execution queue (transition to `promoted` state).
+
+**Request body:**
+```json
+{ "actor": "wi-web", "reason": "Promoted to works-execution from Work Intelligence Web" }
+```
+
+**Response (200 OK):** The updated work item (state-aware payload).
+
+**Errors:** 404 unknown item, 403 not permitted (e.g. not APPROVED), 400 invalid transition.
+
 ### Webhooks (outbound)
 
 | Method | Path | Description |
