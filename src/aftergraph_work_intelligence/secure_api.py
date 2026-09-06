@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
