@@ -24,6 +24,29 @@ def test_docker_entrypoint_targets_secure_factory() -> None:
     assert '"--factory"' in dockerfile
 
 
+def test_dockerfile_installs_real_package_after_source_copy() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    copy_source = dockerfile.index("COPY src/ src/")
+    install_package = dockerfile.index("RUN pip install --no-cache-dir .")
+    assert copy_source < install_package
+    assert "pip install --no-cache-dir -e ." not in dockerfile
+    assert "|| pip install" not in dockerfile
+
+
+def test_docker_runtime_persists_database_and_uses_stdlib_healthcheck() -> None:
+    dockerfile = Path("Dockerfile").read_text(encoding="utf-8")
+    assert "AFTERGRAPH_DB=/data/aftergraph-work-intelligence.db" in dockerfile
+    assert "import urllib.request" in dockerfile
+    assert "import httpx" not in dockerfile
+
+
+def test_compose_keeps_database_on_volume_and_has_no_dev_only_health_dependency() -> None:
+    compose = Path("docker-compose.yml").read_text(encoding="utf-8")
+    assert "AFTERGRAPH_DB=/data/aftergraph-work-intelligence.db" in compose
+    assert "import urllib.request" in compose
+    assert "import httpx" not in compose
+
+
 def test_systemd_documentation_uses_secure_console_script() -> None:
     deployment = Path("docs/DEPLOYMENT.md").read_text(encoding="utf-8")
     assert "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" in deployment
