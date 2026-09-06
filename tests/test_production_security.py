@@ -4,7 +4,6 @@ from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.secure_api import create_app
 
-
 FRONTEND_ORIGIN = "https://work-intelligence.rendetalje.dk"
 
 
