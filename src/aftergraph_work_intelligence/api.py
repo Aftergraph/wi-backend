@@ -387,13 +387,23 @@ Production-grade observation → WorkItem inference engine.
     # Setup OpenTelemetry tracing
     setup_tracing(app)
 
-    # Add CORS middleware
+    # Add CORS middleware. Production defaults are explicit and credentials-safe.
+    cors_origins = [
+        origin.strip().rstrip("/")
+        for origin in os.getenv(
+            "AFTERGRAPH_CORS_ORIGINS",
+            "https://work-intelligence.rendetalje.dk,http://localhost:3001,http://127.0.0.1:3001",
+        ).split(",")
+        if origin.strip()
+    ]
+    if "*" in cors_origins:
+        raise RuntimeError("AFTERGRAPH_CORS_ORIGINS must not contain '*' when credentials are enabled")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=cors_origins,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-API-Key", "X-Request-ID"],
     )
 
     # Body logging middleware (configurable via env)
@@ -404,12 +414,25 @@ Production-grade observation → WorkItem inference engine.
         max_chars=int(os.getenv("AFTERGRAPH_BODY_LOG_MAX_CHARS", "1000")),
     )
 
-    # API version header middleware
+    # API version + baseline browser security headers.
     @app.middleware("http")
     async def add_version_headers(request: Request, call_next):
         response = await call_next(request)
         response.headers["X-API-Version"] = "v1"
         response.headers["X-App-Version"] = "0.2.0"
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; "
+            "form-action 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+            "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+            "img-src 'self' data: https:; connect-src 'self'"
+        )
+        if request.url.path.startswith("/v1/") or request.url.path in {"/dashboard", "/healthz"}:
+            response.headers["Cache-Control"] = "no-store"
         return response
     
     # Add timing middleware
@@ -587,11 +610,25 @@ Production-grade observation → WorkItem inference engine.
             request.state.auth_scopes = ["admin", "read", "write", "delete"]
             return
 
-        # API key authentication
-        if x_api_key and x_api_key.startswith("ak_"):
+        # API key authentication: compare the full secret hash, never only its public prefix.
+        if x_api_key and x_api_key.startswith("ak_") and len(x_api_key) >= 16:
             prefix = x_api_key[:12]
+            candidate_hash = _hashlib.sha256(x_api_key.encode()).hexdigest()
             store: SQLiteStore = request.app.state.store
-            if store.validate_api_key(prefix):
+            try:
+                with store._lock:
+                    row = store._db.execute(
+                        "SELECT key_hash, active FROM api_keys WHERE prefix = ?",
+                        (prefix,),
+                    ).fetchone()
+                    valid = bool(
+                        row
+                        and row["active"]
+                        and _hmac.compare_digest(str(row["key_hash"]), candidate_hash)
+                    )
+            except Exception:
+                valid = False
+            if valid:
                 request.state.auth_method = "api_key"
                 request.state.auth_scopes = ["read", "write"]
                 return

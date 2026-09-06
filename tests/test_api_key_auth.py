@@ -46,7 +46,14 @@ class TestAPIKeyAuth:
         resp = client.get("/v1/work-items?tenant_id=default", headers={"X-API-Key": "ak_invalidkey123"})
         assert resp.status_code == 401
 
-    def test_revoked_api_key_rejected(self, client):
+    def test_same_prefix_forged_api_key_rejected(self, client, created_key):
+        replacement = "0" if created_key[12] != "0" else "1"
+        forged = created_key[:12] + replacement + created_key[13:]
+        assert forged[:12] == created_key[:12]
+        resp = client.get("/v1/work-items?tenant_id=default", headers={"X-API-Key": forged})
+        assert resp.status_code == 401
+
+        def test_revoked_api_key_rejected(self, client):
         # Create a key we can track
         resp = client.post("/v1/api-keys", json={"name": "to-revoke"}, headers=AUTH_BEARER)
         key_info = resp.json()
