@@ -1,7 +1,7 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.venv/
+.venv
 *.db
 *.db-shm
 *.db-wal
@@ -9,8 +9,6 @@ __pycache__/
 build/
 dist/
 *.egg-info/
-__pycache__/
-.venv/
 *.json
 !contracts/work-intelligence-boundary/1.0.json
 logs/
