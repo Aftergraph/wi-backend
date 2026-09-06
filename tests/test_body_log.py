@@ -28,14 +28,14 @@ class TestBodyLoggingMiddleware:
     def test_skip_healthz(self, tmp_path):
         from starlette.applications import Starlette
         from starlette.responses import JSONResponse
+        from starlette.routing import Route
         from starlette.testclient import TestClient
 
-        app = Starlette()
-        app.add_middleware(BodyLoggingMiddleware, log_request_body=True)
-
-        @app.route("/healthz")
         async def healthz(request):
             return JSONResponse({"status": "ok"})
+
+        app = Starlette(routes=[Route("/healthz", healthz)])
+        app.add_middleware(BodyLoggingMiddleware, log_request_body=True)
 
         with TestClient(app) as c:
             # Should not log healthz
@@ -45,22 +45,24 @@ class TestBodyLoggingMiddleware:
     def test_custom_skip_paths(self, tmp_path):
         from starlette.applications import Starlette
         from starlette.responses import JSONResponse
+        from starlette.routing import Route
         from starlette.testclient import TestClient
 
-        app = Starlette()
+        async def skip(request):
+            return JSONResponse({"ok": True})
+
+        async def normal(request):
+            return JSONResponse({"ok": True})
+
+        app = Starlette(routes=[
+            Route("/custom-skip", skip),
+            Route("/normal", normal),
+        ])
         app.add_middleware(
             BodyLoggingMiddleware,
             log_request_body=True,
             skip_paths=frozenset({"/custom-skip"}),
         )
-
-        @app.route("/custom-skip")
-        async def skip(request):
-            return JSONResponse({"ok": True})
-
-        @app.route("/normal")
-        async def normal(request):
-            return JSONResponse({"ok": True})
 
         with TestClient(app) as c:
             resp = c.get("/custom-skip")
@@ -71,14 +73,14 @@ class TestBodyLoggingMiddleware:
     def test_max_chars_truncation(self):
         from starlette.applications import Starlette
         from starlette.responses import JSONResponse
+        from starlette.routing import Route
         from starlette.testclient import TestClient
 
-        app = Starlette()
-        app.add_middleware(BodyLoggingMiddleware, log_request_body=True, max_chars=10)
-
-        @app.route("/test", methods=["POST"])
         async def test(request):
             return JSONResponse({"ok": True})
+
+        app = Starlette(routes=[Route("/test", test, methods=["POST"])])
+        app.add_middleware(BodyLoggingMiddleware, log_request_body=True, max_chars=10)
 
         with TestClient(app) as c:
             resp = c.post("/test", json={"key": "a" * 100})
