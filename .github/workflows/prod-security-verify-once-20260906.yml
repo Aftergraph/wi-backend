@@ -1,0 +1,59 @@
+name: Production Security Verify Once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/prod-security-verify-once-20260906.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      API: https://intel.rendetalje.dk
+    steps:
+      - name: Verify production boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          tmp=$(mktemp -d)
+
+          health_code=$(curl -sS --connect-timeout 10 --max-time 20 -D "$tmp/health.h" -o "$tmp/health.b" -w '%{http_code}' "$API/healthz")
+          echo "health=$health_code body=$(cat "$tmp/health.b")"
+          test "$health_code" = 200
+
+          protected_code=$(curl -sS --connect-timeout 10 --max-time 20 -D "$tmp/protected.h" -o "$tmp/protected.b" -w '%{http_code}' "$API/v1/work-items?tenant_id=smoke-prod")
+          echo "protected_get=$protected_code body=$(head -c 300 "$tmp/protected.b")"
+
+          cors_code=$(curl -sS --connect-timeout 10 --max-time 20 -X OPTIONS -D "$tmp/cors.h" -o "$tmp/cors.b" -w '%{http_code}' \
+            -H 'Origin: https://evil.example' \
+            -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: authorization,x-api-key,content-type' \
+            "$API/v1/observations")
+          echo "evil_cors=$cors_code"
+          grep -iE '^(access-control-allow-origin|access-control-allow-credentials|strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|referrer-policy|permissions-policy):' "$tmp/cors.h" || true
+
+          echo 'health security headers:'
+          grep -iE '^(strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|referrer-policy|permissions-policy|cache-control):' "$tmp/health.h" || true
+
+          failures=0
+          if [ "$protected_code" != 401 ] && [ "$protected_code" != 403 ]; then
+            echo 'FAIL: protected GET is not fail-closed'
+            failures=1
+          fi
+          if [ "$cors_code" != 403 ]; then
+            echo 'FAIL: arbitrary-origin CORS preflight is not denied'
+            failures=1
+          fi
+          for h in strict-transport-security content-security-policy x-content-type-options x-frame-options referrer-policy permissions-policy; do
+            if ! grep -qi "^${h}:" "$tmp/health.h"; then
+              echo "FAIL: missing $h"
+              failures=1
+            fi
+          done
+          test "$failures" = 0
+          echo 'PROD_SECURITY_VERIFY=PASS'
