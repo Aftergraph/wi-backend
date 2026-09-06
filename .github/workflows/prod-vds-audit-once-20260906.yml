@@ -1,0 +1,91 @@
+name: Production VDS Audit Once
+
+on:
+  push:
+    branches:
+      - ops/prod-vds-audit-20260906
+    paths:
+      - .github/workflows/prod-vds-audit-once-20260906.yml
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: [self-hosted, linux, x64, aie-interop]
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit VDS runtime without mutating it
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "runner_name=${RUNNER_NAME:-unknown}"
+          echo "hostname=$(hostname)"
+          echo "user=$(id -un)"
+          echo "uid=$(id -u) gid=$(id -g)"
+
+          echo '--- systemd metadata ---'
+          if systemctl show work-intelligence \
+              -p LoadState \
+              -p ActiveState \
+              -p SubState \
+              -p FragmentPath \
+              -p User \
+              -p Group \
+              -p WorkingDirectory \
+              -p ExecStart \
+              -p EnvironmentFiles \
+              --no-pager 2>/dev/null; then
+            :
+          else
+            echo 'work-intelligence unit not readable or not present'
+          fi
+
+          echo '--- deployment checkout ---'
+          if [ -d /opt/work-intelligence ]; then
+            stat -c 'path=%n owner=%U:%G mode=%a' /opt/work-intelligence || true
+            if [ -d /opt/work-intelligence/.git ]; then
+              echo "deploy_head=$(git -C /opt/work-intelligence rev-parse HEAD 2>/dev/null || true)"
+              echo "deploy_branch=$(git -C /opt/work-intelligence branch --show-current 2>/dev/null || true)"
+              git -C /opt/work-intelligence status --short --branch 2>/dev/null || true
+            else
+              echo 'deploy checkout has no .git directory'
+            fi
+            if [ -x /opt/work-intelligence/.venv/bin/aftergraph-work-intelligence ]; then
+              echo 'secure_console_script=present'
+            else
+              echo 'secure_console_script=missing'
+            fi
+          else
+            echo '/opt/work-intelligence is absent'
+          fi
+
+          echo '--- production env metadata (names only; values suppressed) ---'
+          if [ -f /etc/aftergraph/work-intelligence.env ]; then
+            stat -c 'env_path=%n owner=%U:%G mode=%a' /etc/aftergraph/work-intelligence.env || true
+            sed -n 's/^\([A-Z0-9_][A-Z0-9_]*\)=.*/env_key=\1/p' /etc/aftergraph/work-intelligence.env | sort -u
+          else
+            echo 'env_file=absent'
+          fi
+
+          echo '--- local listener / health ---'
+          ss -ltn 2>/dev/null | grep -E '(:8090|:8087|:3001)([[:space:]]|$)' || true
+          for port in 8090 8087; do
+            code=$(curl -sS --connect-timeout 2 --max-time 5 -o "/tmp/wi-health-${port}.json" -w '%{http_code}' "http://127.0.0.1:${port}/healthz" || true)
+            echo "health_${port}=${code:-000}"
+            if [ "${code:-}" = 200 ]; then
+              head -c 500 "/tmp/wi-health-${port}.json"; echo
+            fi
+          done
+
+          echo '--- non-mutating privilege capability ---'
+          if sudo -n systemctl is-active work-intelligence >/dev/null 2>&1; then
+            echo 'passwordless_systemctl_read=yes'
+          else
+            echo 'passwordless_systemctl_read=no_or_unit_inactive'
+          fi
+
+          echo 'VDS_AUDIT=COMPLETE'
