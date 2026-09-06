@@ -4,16 +4,25 @@
 
 - `renos-control-tunnel-1`: Up, remote-managed via `TUNNEL_TOKEN` (ingress in Zero Trust dashboard, no local config).
 - `wi-quick-tunnel`: temporary `cloudflared --url http://127.0.0.1:8090` (webhooks use this until permanent hostname exists).
-- Backend `:8090` + frontend `:3001` healthy on VDS; `intel.rendetalje.dk` returns HTTP 000 (no ingress yet).
+- Backend `:8090` + frontend `:3001` healthy on VDS.
+- Tunnel ingress is now configured remotely (Cloudflare config version 5):
+  - `intel.rendetalje.dk` → `http://172.17.0.1:8090` (backend/webhooks)
+  - `work-intelligence.rendetalje.dk` → `http://172.17.0.1:3001` (frontend UI)
+- DNS CNAME records are still missing: current Wrangler OAuth has zone-read but not DNS-write permission, so both names remain unresolved.
 
-## Jonas action (~2 min, Zero Trust dashboard)
+## Jonas action (~2 min, Cloudflare DNS)
 
-Networks → Tunnels → `renos-control-tunnel-1` → Public Hostnames → Add:
+Create proxied CNAME records in zone `rendetalje.dk`:
 
-- Subdomain: `intel`, Domain: `rendetalje.dk`
-- Service: copy pattern from existing hostnames (target: backend `:8090`)
+| Name | Target | Proxy |
+|---|---|---|
+| `intel` | `8b80b1e3-886c-459a-bae9-c668d18aec1a.cfargotunnel.com` | Proxied |
+| `work-intelligence` | `8b80b1e3-886c-459a-bae9-c668d18aec1a.cfargotunnel.com` | Proxied |
 
-Verify: `curl https://intel.rendetalje.dk/healthz` → backend JSON.
+Then verify:
+
+- `curl https://intel.rendetalje.dk/healthz` → backend JSON
+- Open `https://work-intelligence.rendetalje.dk/` → Aftergraph Work Intelligence UI
 
 ## After ingress is live
 
