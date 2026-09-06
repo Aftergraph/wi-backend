@@ -32,12 +32,12 @@ jobs:
 
       - name: Lint
         run: |
-          pip install ruff
+          pip install "ruff==0.16.6"
           ruff check src/ tests/
 
       - name: Type-check
         run: |
-          pip install mypy
+          pip install "mypy==2.1"
           mypy src/aftergraph_work_intelligence/ --ignore-missing-imports
 
       - name: Test
