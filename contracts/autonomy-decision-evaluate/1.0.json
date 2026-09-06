@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aftergraph.dev/contracts/autonomy-decision-evaluate/1.0.json",
+  "title": "Aftergraph Autonomous Decision Evaluation",
+  "description": "A provider-neutral, auditable evaluation envelope for bounded automation. This contract describes a decision proposal; it never grants execution authority or approval.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "request_id",
+    "subject",
+    "capability",
+    "intent",
+    "risk",
+    "confidence",
+    "decision",
+    "human_action",
+    "evidence",
+    "authority"
+  ],
+  "properties": {
+    "schema": {
+      "const": "aftergraph.autonomy-decision/1.0"
+    },
+    "request_id": {
+      "type": "string",
+      "pattern": "^adr_[a-zA-Z0-9_-]{8,128}$"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant_id", "repository", "ref", "head_sha", "event_key"],
+      "properties": {
+        "tenant_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "repository": { "type": "string", "pattern": "^[^/\\s]+/[^/\\s]+$" },
+        "ref": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "head_sha": { "type": "string", "pattern": "^[0-9a-fA-F]{7,64}$" },
+        "event_key": { "type": "string", "minLength": 1, "maxLength": 512 }
+      }
+    },
+    "capability": {
+      "type": "string",
+      "enum": [
+        "dependency.patch.merge",
+        "ci.check.retry",
+        "deployment.rollback.prepare",
+        "github.status.sync",
+        "github.suggestion.comment",
+        "none"
+      ]
+    },
+    "intent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["objective", "impact_summary"],
+      "properties": {
+        "objective": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "impact_summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Two-sentence operator summary: Intent: ... Risk: ..."
+        }
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["level", "factors", "blocking_controls"],
+      "properties": {
+        "level": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "factors": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "full_test_suite",
+              "exported_signature_changed",
+              "critical_file_touched",
+              "auth_or_secret_touched",
+              "proxy_or_ssl_touched",
+              "transient_ci_error",
+              "canary_error_rate_exceeded",
+              "superseded_head",
+              "stale_review"
+            ]
+          }
+        },
+        "blocking_controls": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 128 }
+        }
+      }
+    },
+    "confidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["score", "components"],
+      "properties": {
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "components": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "test_coverage_delta",
+            "author_permission_tier",
+            "critical_path_penalty",
+            "line_churn_penalty"
+          ],
+          "properties": {
+            "test_coverage_delta": { "type": "integer", "minimum": 0, "maximum": 30 },
+            "author_permission_tier": { "type": "integer", "minimum": 0, "maximum": 20 },
+            "critical_path_penalty": { "type": "integer", "minimum": 0, "maximum": 40 },
+            "line_churn_penalty": { "type": "integer", "minimum": 0, "maximum": 10 }
+          }
+        }
+      }
+    },
+    "decision": {
+      "type": "string",
+      "enum": ["auto_approve", "auto_retry", "prepare_rollback", "requires_human_signoff", "blocked"]
+    },
+    "human_action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "reason"],
+      "properties": {
+        "required": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "action_label": { "type": "string", "minLength": 1, "maxLength": 120 }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "source", "observed_at", "reference"],
+        "properties": {
+          "kind": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "source": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "observed_at": { "type": "string", "format": "date-time" },
+          "reference": { "type": "string", "minLength": 1, "maxLength": 1024 },
+          "digest": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }
+        }
+      }
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_authority", "execution_state"],
+      "properties": {
+        "execution_authority": { "const": "evaluation-only" },
+        "execution_state": { "const": "not_executed" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "risk": { "properties": { "level": { "const": "critical" } } } } },
+      "then": {
+        "properties": {
+          "decision": { "enum": ["requires_human_signoff", "blocked"] },
+          "human_action": { "properties": { "required": { "const": true } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "risk": { "properties": { "factors": { "contains": { "const": "auth_or_secret_touched" } } } } } },
+      "then": {
+        "properties": {
+          "risk": { "properties": { "level": { "const": "critical" } } },
+          "decision": { "enum": ["requires_human_signoff", "blocked"] },
+          "human_action": { "properties": { "required": { "const": true } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "risk": { "properties": { "factors": { "contains": { "const": "proxy_or_ssl_touched" } } } } } },
+      "then": {
+        "properties": {
+          "risk": { "properties": { "level": { "enum": ["high", "critical"] } } },
+          "decision": { "enum": ["requires_human_signoff", "blocked"] },
+          "human_action": { "properties": { "required": { "const": true } } }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "risk": { "properties": { "factors": { "contains": { "const": "canary_error_rate_exceeded" } } } } } },
+      "then": {
+        "properties": {
+          "decision": { "enum": ["prepare_rollback", "requires_human_signoff", "blocked"] },
+          "human_action": { "properties": { "required": { "const": true } } }
+        }
+      }
+    }
+  ]
+}
