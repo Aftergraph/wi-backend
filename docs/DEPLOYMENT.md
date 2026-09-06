@@ -258,7 +258,7 @@ curl -sSI "$API/healthz" | grep -iE \
   '^(strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|referrer-policy|permissions-policy|cache-control):'
 ```
 
-A production deployment is not considered verified until these checks pass against the public hostname. Source-level CI is necessary, but it does not prove the VDS is running the new revision. Humanity has suffered enough from dashboards claiming green while the old process quietly keeps serving traffic.
+A production deployment is not considered verified until these checks pass against the public hostname. Source-level CI is necessary, but it does not prove the VDS is running the new revision.
 
 ---
 
