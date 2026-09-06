@@ -23,6 +23,40 @@ Capability = Literal[
 _SHA_RE = r"^[0-9a-fA-F]{7,64}$"
 _REPOSITORY_RE = r"^[^/\s]+/[^/\s]+$"
 
+# ponytail: static critical-file matchers — ceiling: no content-level secret detection.
+# Upgrade path: grep diff hunks for secret values / gitleaks-style entropy scan.
+_CRITICAL_FILE_PATTERNS: tuple[tuple[str, str], ...] = (
+    ("auth", r"(^|/)(auth|session|token|login|permission|rbac|iam)(/|_|\.)"),
+    ("secret", r"(^|/)(secret|credential|key|cert|certificate|\.env)(/|_|\.|$)"),
+    ("proxy", r"(^|/)(caddyfile|proxy|gateway|ingress|caddy|nginx|tls|ssl|cors)(/|_|\.|$)"),
+)
+
+
+def _scan_critical_files(
+    value: AutonomyEvaluationInput,
+) -> tuple[bool, bool, bool]:
+    """Derive trust-boundary flags by scanning changed_files directly.
+
+    Fail-closed: a caller-declared flag can only ever set a bit HIGHER
+    (never lower). The scan is additive with the caller's own signals so a
+    lying or broken caller cannot downgrade a critical change.
+    """
+    auth_touched = value.auth_or_secret_touched
+    proxy_touched = value.proxy_or_ssl_touched
+    for path in value.changed_files:
+        lowered = path.lower()
+        for label, pattern in _CRITICAL_FILE_PATTERNS:
+            import re
+
+            if re.search(pattern, lowered):
+                if label == "auth":
+                    auth_touched = True
+                elif label == "secret":
+                    auth_touched = True
+                elif label == "proxy":
+                    proxy_touched = True
+    return auth_touched, proxy_touched, auth_touched or proxy_touched
+
 # ponytail: hardcoded blast-radius map — ceiling: no AST parsing, no import graph.
 # Upgrade path: tree-sitter + route extractor for dynamic surface detection.
 _BLAST_RADIUS_MAP: dict[str, list[str]] = {
@@ -133,7 +167,11 @@ def _validate_input(value: AutonomyEvaluationInput) -> None:
             raise ValueError(f"{name} must be between {low} and {high}")
 
 
-def _factors(value: AutonomyEvaluationInput) -> list[str]:
+def _factors(
+    value: AutonomyEvaluationInput,
+    scanned_auth: bool | None = None,
+    scanned_proxy: bool | None = None,
+) -> list[str]:
     factors: list[str] = []
     if value.tests_passed:
         factors.append("full_test_suite")
@@ -141,9 +179,9 @@ def _factors(value: AutonomyEvaluationInput) -> list[str]:
         factors.append("exported_signature_changed")
     if value.critical_file_touched:
         factors.append("critical_file_touched")
-    if value.auth_or_secret_touched:
+    if value.auth_or_secret_touched or scanned_auth:
         factors.append("auth_or_secret_touched")
-    if value.proxy_or_ssl_touched:
+    if value.proxy_or_ssl_touched or scanned_proxy:
         factors.append("proxy_or_ssl_touched")
     if value.transient_ci_error:
         factors.append("transient_ci_error")
@@ -226,7 +264,10 @@ def _decision(value: AutonomyEvaluationInput, factors: list[str]) -> tuple[str, 
 def evaluate_autonomy(value: AutonomyEvaluationInput) -> dict[str, Any]:
     """Return a schema-shaped, non-authorizing autonomy evaluation."""
     _validate_input(value)
-    factors = _factors(value)
+    scanned_auth, scanned_proxy, _ = _scan_critical_files(value)
+    # Fail-closed: caller-declared flags are OR'd with the file scan so a
+    # broken/lying caller can never downgrade a critical change.
+    factors = _factors(value, scanned_auth or None, scanned_proxy or None)
     risk_level = _risk_level(value, factors)
     controls = _blocking_controls(value, factors)
     decision, human_required, reason = _decision(value, factors)

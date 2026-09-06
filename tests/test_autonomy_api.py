@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 
@@ -29,126 +30,236 @@ def _make_request(**overrides: object) -> dict:
     return body
 
 
-def _client() -> TestClient:
+@contextmanager
+def _client():
     app = create_app(db_path=":memory:", api_token="test-token")
-    return TestClient(app)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
 
 
 class TestAutonomyEndpoint:
     def test_low_risk_patch_auto_approved(self):
-        client = _client()
-        body = _make_request()
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["decision"] == "auto_approve"
-        assert data["risk"]["level"] == "low"
-        assert data["human_action"]["required"] is False
-        assert data["authority"]["execution_state"] == "not_executed"
-        assert data["schema"] == "aftergraph.autonomy-decision/1.0"
+        with _client() as client:
+            body = _make_request()
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "auto_approve"
+            assert data["risk"]["level"] == "low"
+            assert data["human_action"]["required"] is False
+            assert data["authority"]["execution_state"] == "not_executed"
+            assert data["schema"] == "aftergraph.autonomy-decision/1.0"
 
     def test_auth_secret_change_is_blocked(self):
-        client = _client()
-        body = _make_request(auth_or_secret_touched=True)
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["decision"] == "blocked"
-        assert data["risk"]["level"] == "critical"
-        assert data["human_action"]["required"] is True
+        with _client() as client:
+            body = _make_request(auth_or_secret_touched=True)
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "blocked"
+            assert data["risk"]["level"] == "critical"
+            assert data["human_action"]["required"] is True
 
     def test_proxy_change_is_blocked(self):
-        client = _client()
-        body = _make_request(proxy_or_ssl_touched=True)
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["decision"] == "blocked"
-        assert data["risk"]["level"] == "critical"
+        with _client() as client:
+            body = _make_request(proxy_or_ssl_touched=True)
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "blocked"
+            assert data["risk"]["level"] == "critical"
 
     def test_canary_drift_prepares_rollback(self):
-        client = _client()
-        body = _make_request(
-            capability="deployment.rollback.prepare",
-            canary_error_rate=0.006,
-        )
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["decision"] == "prepare_rollback"
-        assert data["human_action"]["required"] is True
+        with _client() as client:
+            body = _make_request(
+                capability="deployment.rollback.prepare",
+                canary_error_rate=0.006,
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "prepare_rollback"
+            assert data["human_action"]["required"] is True
 
     def test_ci_retry_auto_eligible(self):
-        client = _client()
-        body = _make_request(
-            capability="ci.check.retry",
-            patch_release=False,
-            transient_ci_error=True,
-        )
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["decision"] == "auto_retry"
-        assert data["human_action"]["required"] is False
+        with _client() as client:
+            body = _make_request(
+                capability="ci.check.retry",
+                patch_release=False,
+                transient_ci_error=True,
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "auto_retry"
+            assert data["human_action"]["required"] is False
 
     def test_validation_rejects_bad_sha(self):
-        client = _client()
-        body = _make_request(head_sha="not-a-sha")
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 422
+        with _client() as client:
+            body = _make_request(head_sha="not-a-sha")
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 422
 
     def test_validation_rejects_empty_evidence(self):
-        client = _client()
-        body = _make_request(evidence=[])
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 422
+        with _client() as client:
+            body = _make_request(evidence=[])
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 422
 
     def test_unauthenticated_returns_401(self):
-        client = _client()
-        body = _make_request()
-        resp = client.post("/v1/autonomy/decisions/evaluate", json=body)
-        assert resp.status_code == 401
+        with _client() as client:
+            body = _make_request()
+            resp = client.post("/v1/autonomy/decisions/evaluate", json=body)
+            assert resp.status_code == 401
 
     def test_blast_radius_computed_from_changed_files(self):
-        client = _client()
-        body = _make_request(
-            changed_files=["src/routes/api.py", "src/policy/engine.py", "tests/test_api.py"],
-        )
-        resp = client.post(
-            "/v1/autonomy/decisions/evaluate",
-            json=body,
-            headers={"Authorization": "Bearer test-token"},
-        )
-        assert resp.status_code == 200
-        br = resp.json()["blast_radius"]
-        assert br["changed_files"] == 3
-        assert "api_surface" in br["affected_surfaces"] or "request_handlers" in br["affected_surfaces"]
-        assert br["affected_surface_count"] >= 1
+        with _client() as client:
+            body = _make_request(
+                changed_files=["src/routes/api.py", "src/policy/engine.py", "tests/test_api.py"],
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            br = resp.json()["blast_radius"]
+            assert br["changed_files"] == 3
+            assert "api_surface" in br["affected_surfaces"] or "request_handlers" in br["affected_surfaces"]
+            assert br["affected_surface_count"] >= 1
+
+    def test_auth_file_scan_blocks_lying_caller(self):
+        """Fail-closed: changed_files with auth/ path blocks even if caller
+        declares auth_or_secret_touched=false."""
+        with _client() as client:
+            body = _make_request(
+                auth_or_secret_touched=False,
+                changed_files=["src/auth/token_signer.py"],
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "blocked"
+            assert data["risk"]["level"] == "critical"
+            assert data["human_action"]["required"] is True
+
+    def test_proxy_file_scan_blocks_without_caller_flag(self):
+        """Fail-closed: proxy path change blocks even with no proxy flag set."""
+        with _client() as client:
+            body = _make_request(
+                proxy_or_ssl_touched=False,
+                changed_files=["Caddyfile"],
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "blocked"
+            assert data["risk"]["level"] == "critical"
+
+    def test_benign_changed_files_do_not_block(self):
+        """Normal files in changed_files must not trip the trust-boundary scan."""
+        with _client() as client:
+            body = _make_request(
+                auth_or_secret_touched=False,
+                changed_files=["src/routes/health.py", "README.md"],
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["decision"] == "auto_approve"
+            assert data["risk"]["level"] == "low"
+
+    def test_evaluation_persisted_to_audit_trail(self):
+        """POST evaluate must append to the autonomy_decisions audit trail."""
+        with _client() as client:
+            body = _make_request()
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+
+            history = client.get(
+                "/v1/autonomy/decisions/history",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert history.status_code == 200
+            data = history.json()
+            assert data["schema"] == "aftergraph.autonomy-decision-history/1.0"
+            assert data["count"] >= 1
+            latest = data["decisions"][0]
+            assert latest["request_id"] == body["request_id"]
+            assert latest["tenant_id"] == "default"
+            assert latest["capability"] == "dependency.patch.merge"
+            assert latest["decision"] in ("auto_approve", "requires_human_signoff", "blocked")
+
+    def test_history_filters_by_tenant_and_bounds_limit(self):
+        """History must filter by tenant_id and clamp limit to max 200."""
+        with _client() as client:
+            other_body = _make_request(tenant_id="other-tenant")
+            client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=other_body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+            filtered = client.get(
+                "/v1/autonomy/decisions/history?tenant_id=other-tenant&limit=500",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert filtered.status_code == 200
+            data = filtered.json()
+            assert data["count"] == 1
+            assert data["decisions"][0]["tenant_id"] == "other-tenant"
+
+            empty = client.get(
+                "/v1/autonomy/decisions/history?tenant_id=nonexistent",
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert empty.json()["count"] == 0
+
+    def test_history_requires_auth(self):
+        with _client() as client:
+            resp = client.get("/v1/autonomy/decisions/history")
+            assert resp.status_code == 401

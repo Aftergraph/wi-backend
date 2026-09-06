@@ -329,6 +329,58 @@ class AutonomyEvaluateRequest(BaseModel):
     changed_files: list[str] = Field(default_factory=list, max_length=2000)
 
 
+def _persist_autonomy_decision(
+    store: SQLiteStore,
+    payload: AutonomyEvaluateRequest,
+    evaluation: dict[str, Any],
+) -> None:
+    """Append a sealed decision envelope to the autonomy audit trail.
+
+    Pure record-keeping; failures must not fail the evaluation itself, so the
+    insert is best-effort inside a try/except (the caller still gets the
+    envelope even if persistence hiccups).
+    """
+    import json as _json
+
+    subject = evaluation.get("subject", {})
+    risk = evaluation.get("risk", {})
+    confidence = evaluation.get("confidence", {})
+    human = evaluation.get("human_action", {})
+    try:
+        store._db.execute(
+            """
+            INSERT INTO autonomy_decisions (
+                request_id, tenant_id, repository, ref, head_sha, event_key,
+                capability, decision, risk_level, confidence_score,
+                human_required, approval_type, blast_radius_json,
+                blockers_json, evaluated_at, payload_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                evaluation.get("request_id", payload.request_id),
+                subject.get("tenant_id", payload.tenant_id),
+                subject.get("repository", payload.repository),
+                subject.get("ref", payload.ref),
+                subject.get("head_sha", payload.head_sha),
+                subject.get("event_key", payload.event_key),
+                evaluation.get("capability", payload.capability),
+                evaluation.get("decision", ""),
+                risk.get("level", ""),
+                int(confidence.get("score", 0)),
+                1 if human.get("required") else 0,
+                human.get("approval_type", "none"),
+                _json.dumps(evaluation.get("blast_radius", {})),
+                _json.dumps(evaluation.get("blockers", [])),
+                subject.get("evaluated_at")
+                or evaluation.get("evaluated_at", ""),
+                _json.dumps(payload.model_dump()),
+            ),
+        )
+        store._db.commit()
+    except Exception:  # pragma: no cover - audit must never break evaluation
+        store._db.rollback()
+
+
 def create_app(
     db_path: str | Path = "./aftergraph-work-intelligence.db",
     api_token: str | None = None,
@@ -1373,6 +1425,8 @@ Production-grade observation → WorkItem inference engine.
                 changed_files=payload.changed_files,
             ),
         )
+        store: SQLiteStore = request.app.state.store
+        _persist_autonomy_decision(store, payload, evaluation)
         return {
             "schema": evaluation["schema"],
             "request_id": evaluation["request_id"],
@@ -1386,6 +1440,38 @@ Production-grade observation → WorkItem inference engine.
             "evidence": evaluation["evidence"],
             "authority": evaluation["authority"],
             "blast_radius": evaluation.get("blast_radius", {}),
+        }
+
+    @router.get(
+        "/autonomy/decisions/history",
+        status_code=200,
+        dependencies=[Depends(auth)],
+    )
+    def autonomy_history(
+        request: Request,
+        tenant_id: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Return the most recent autonomy decision audit trail.
+
+        Bounded to the last 50 entries by default (max 200). Read-only; no
+        side effects. Requires authentication.
+        """
+        store: SQLiteStore = request.app.state.store
+        limit = min(max(limit, 1), 200)
+        query = "SELECT * FROM autonomy_decisions"
+        params: list[Any] = []
+        if tenant_id:
+            query += " WHERE tenant_id = ?"
+            params.append(tenant_id)
+        query += " ORDER BY evaluated_at DESC LIMIT ?"
+        params.append(limit)
+        rows = store._db.execute(query, params).fetchall()
+        columns = [desc[0] for desc in store._db.execute("SELECT * FROM autonomy_decisions LIMIT 0").description]
+        return {
+            "schema": "aftergraph.autonomy-decision-history/1.0",
+            "count": len(rows),
+            "decisions": [dict(zip(columns, row)) for row in rows],
         }
 
 

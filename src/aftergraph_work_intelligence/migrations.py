@@ -134,6 +134,37 @@ MIGRATIONS = [
         ON tenant_policies(tenant_id);
         """,
     ),
+    (
+        4,
+        "add_autonomy_decisions_audit",
+        """
+        CREATE TABLE IF NOT EXISTS autonomy_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT NOT NULL UNIQUE,
+            tenant_id TEXT NOT NULL,
+            repository TEXT NOT NULL,
+            ref TEXT NOT NULL,
+            head_sha TEXT NOT NULL,
+            event_key TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            decision TEXT NOT NULL,
+            risk_level TEXT NOT NULL,
+            confidence_score INTEGER NOT NULL,
+            human_required INTEGER NOT NULL,
+            approval_type TEXT NOT NULL,
+            blast_radius_json TEXT,
+            blockers_json TEXT,
+            evaluated_at TEXT NOT NULL,
+            payload_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_autonomy_decisions_tenant
+        ON autonomy_decisions(tenant_id);
+        CREATE INDEX IF NOT EXISTS idx_autonomy_decisions_evaluated_at
+        ON autonomy_decisions(evaluated_at);
+        CREATE INDEX IF NOT EXISTS idx_autonomy_decisions_decision
+        ON autonomy_decisions(decision);
+        """,
+    ),
 ]
 
 
