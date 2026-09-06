@@ -3,10 +3,15 @@ set -Eeuo pipefail
 
 REPO_DIR="/opt/work-intelligence"
 SERVICE="work-intelligence"
-ENV_FILE="/etc/aftergraph/work-intelligence.env"
+FRONTEND_SERVICE="work-intelligence-web"
+ENV_FILE="/etc/work-intelligence-webhook.secret"
 UNIT_SOURCE="deploy/systemd/work-intelligence.service"
-LOCAL_API="http://127.0.0.1:8090"
+VDS_BACKEND_OVERRIDE="deploy/systemd/work-intelligence-vds.conf"
+VDS_FRONTEND_OVERRIDE="deploy/systemd/work-intelligence-web-vds.conf"
+LOCAL_API="http://172.17.0.1:8090"
+LOCAL_FRONTEND="http://127.0.0.1:3001"
 PUBLIC_API="https://intel.rendetalje.dk"
+PUBLIC_FRONTEND="https://work-intelligence.rendetalje.dk"
 TARGET_SHA=""
 INSTALL_UNIT=0
 PREFLIGHT_ONLY=0
@@ -19,13 +24,13 @@ Usage:
 
 Options:
   --sha SHA            Exact verified commit to deploy. Required.
-  --install-unit       Install the checked-in canonical systemd unit before restart.
+  --install-unit       Install the checked-in VDS systemd overrides before restart.
   --preflight-only     Validate host/repo/env/unit prerequisites without changing production.
   --skip-public        Skip the final public-hostname security probe.
   --repo-dir PATH      Deployment checkout. Default: /opt/work-intelligence
   --service NAME       systemd service. Default: work-intelligence
-  --env-file PATH      Production environment file. Default: /etc/aftergraph/work-intelligence.env
-  --local-api URL      Local API base. Default: http://127.0.0.1:8090
+  --env-file PATH      Production environment file. Default: /etc/work-intelligence-webhook.secret
+  --local-api URL      Local API base. Default: http://172.17.0.1:8090
   --public-api URL     Public API base. Default: https://intel.rendetalje.dk
   -h, --help           Show this help.
 
@@ -97,7 +102,7 @@ done
 
 [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "--sha must be an exact lowercase 40-character Git SHA"
 
-for cmd in git curl python3 systemctl; do
+for cmd in git curl python3 systemctl uv; do
   command -v "$cmd" >/dev/null 2>&1 || fail "required command missing: $cmd"
 done
 
@@ -129,6 +134,8 @@ REMOTE_SHA="$(git_repo rev-parse origin/main)"
 [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || fail "requested SHA is not the current origin/main exact head ($REMOTE_SHA)"
 git_repo cat-file -e "${TARGET_SHA}^{commit}" || fail "requested SHA is not available in the deployment checkout"
 git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}" || fail "canonical systemd unit is missing from requested target SHA"
+git_repo cat-file -e "${TARGET_SHA}:${VDS_BACKEND_OVERRIDE}" || fail "VDS backend override is missing from requested target SHA"
+git_repo cat-file -e "${TARGET_SHA}:${VDS_FRONTEND_OVERRIDE}" || fail "VDS frontend override is missing from requested target SHA"
 
 DB_PATH="$(root python3 - "$ENV_FILE" <<'PY'
 from __future__ import annotations
@@ -151,41 +158,36 @@ for raw in path.read_text(encoding="utf-8").splitlines():
 
 required = (
     "AFTERGRAPH_API_TOKEN",
-    "AFTERGRAPH_EVIDENCE_SECRET",
     "AFTERGRAPH_GITHUB_WEBHOOK_SECRET",
-    "AFTERGRAPH_CORS_ORIGINS",
-    "AFTERGRAPH_DB",
-    "AFTERGRAPH_HOST",
-    "AFTERGRAPH_PORT",
+    "AFTERGRAPH_WORKS_URL",
+    "AFTERGRAPH_WORKS_ENROLL_SECRET",
+    "AFTERGRAPH_WORKS_WORKER_ID",
 )
 missing = [key for key in required if not values.get(key)]
 if missing:
     raise SystemExit("missing required production env keys: " + ",".join(missing))
 
-if values["AFTERGRAPH_CORS_ORIGINS"] != "https://work-intelligence.rendetalje.dk":
+db_path = values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db")
+host = values.get("AFTERGRAPH_HOST", "172.17.0.1")
+port = values.get("AFTERGRAPH_PORT", "8090")
+cors = values.get("AFTERGRAPH_CORS_ORIGINS", "https://work-intelligence.rendetalje.dk")
+
+if cors != "https://work-intelligence.rendetalje.dk":
     raise SystemExit("AFTERGRAPH_CORS_ORIGINS is not the production frontend allowlist")
-if values["AFTERGRAPH_DB"] != "/var/lib/work-intelligence/data.db":
-    raise SystemExit("AFTERGRAPH_DB must be /var/lib/work-intelligence/data.db")
-if values["AFTERGRAPH_HOST"] != "127.0.0.1":
-    raise SystemExit("AFTERGRAPH_HOST must be 127.0.0.1 behind the tunnel")
-if values["AFTERGRAPH_PORT"] != "8090":
+if values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db") != "/var/lib/work-intelligence/wi.db":
+    raise SystemExit("AFTERGRAPH_DB must be /var/lib/work-intelligence/wi.db")
+if values.get("AFTERGRAPH_HOST", "172.17.0.1") != "172.17.0.1":
+    raise SystemExit("AFTERGRAPH_HOST must be 172.17.0.1 on the current named-tunnel topology")
+if port != "8090":
     raise SystemExit("AFTERGRAPH_PORT must be 8090 on the current VDS topology")
 
-print(values["AFTERGRAPH_DB"])
+print(db_path)
 PY
 )" || fail "production environment validation failed"
 
 [[ -n "$DB_PATH" ]] || fail "AFTERGRAPH_DB resolved to an empty path"
 
-SYSTEM_USER_STATE="not-applicable"
-if ((INSTALL_UNIT)); then
-  if id work-intelligence >/dev/null 2>&1; then
-    getent group work-intelligence >/dev/null 2>&1 || fail "work-intelligence user exists but matching group is missing"
-    SYSTEM_USER_STATE="present"
-  else
-    SYSTEM_USER_STATE="will-create"
-  fi
-else
+if ((INSTALL_UNIT == 0)); then
   UNIT_TEXT="$(root systemctl cat "$SERVICE" 2>/dev/null)" || fail "systemd service is missing: $SERVICE"
   grep -Fq "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$UNIT_TEXT" \
     || fail "current systemd service bypasses the secure production entrypoint; rerun with --install-unit"
@@ -197,7 +199,6 @@ printf 'preflight_repo=%s\n' "$REPO_DIR"
 printf 'preflight_service=%s\n' "$SERVICE"
 printf 'preflight_db=%s\n' "$DB_PATH"
 printf 'preflight_install_unit=%s\n' "$INSTALL_UNIT"
-printf 'preflight_system_user=%s\n' "$SYSTEM_USER_STATE"
 
 if ((PREFLIGHT_ONLY)); then
   printf 'DEPLOYMENT_PREFLIGHT=PASS\n'
@@ -235,28 +236,30 @@ git_repo switch main
 git_repo merge --ff-only "$TARGET_SHA"
 [[ "$(git_repo rev-parse HEAD)" == "$TARGET_SHA" ]] || fail "checkout did not land on requested exact SHA"
 [[ -f "$REPO_DIR/$UNIT_SOURCE" ]] || fail "canonical systemd unit missing after exact-head checkout"
+[[ -f "$REPO_DIR/$VDS_BACKEND_OVERRIDE" ]] || fail "VDS backend override missing after exact-head checkout"
+[[ -f "$REPO_DIR/$VDS_FRONTEND_OVERRIDE" ]] || fail "VDS frontend override missing after exact-head checkout"
 
-root "$REPO_DIR/.venv/bin/python" -m pip install --upgrade "$REPO_DIR"
+uv pip install --python "$REPO_DIR/.venv/bin/python" -e "$REPO_DIR"
 
 if ((INSTALL_UNIT)); then
-  if ! id work-intelligence >/dev/null 2>&1; then
-    NOLOGIN="$(command -v nologin || true)"
-    [[ -n "$NOLOGIN" ]] || NOLOGIN="/usr/sbin/nologin"
-    root useradd --system --user-group --home-dir /nonexistent --shell "$NOLOGIN" work-intelligence
-  fi
+  BACKEND_DROPIN_DIR="/etc/systemd/system/${SERVICE}.service.d"
+  FRONTEND_DROPIN_DIR="/etc/systemd/system/${FRONTEND_SERVICE}.service.d"
+  BACKEND_DROPIN="${BACKEND_DROPIN_DIR}/10-secure-entrypoint.conf"
+  FRONTEND_DROPIN="${FRONTEND_DROPIN_DIR}/10-private-backend.conf"
 
-  FRAGMENT_PATH="$(root systemctl show "$SERVICE" -p FragmentPath --value 2>/dev/null || true)"
-  if [[ -n "$FRAGMENT_PATH" && -f "$FRAGMENT_PATH" ]]; then
-    UNIT_BACKUP="$BACKUP_DIR/work-intelligence.service.${TIMESTAMP}"
-    root cp -a "$FRAGMENT_PATH" "$UNIT_BACKUP"
-    printf 'unit_backup=%s\n' "$UNIT_BACKUP"
+  root install -d -m 0755 "$BACKEND_DROPIN_DIR" "$FRONTEND_DROPIN_DIR"
+  if root test -f "$BACKEND_DROPIN"; then
+    UNIT_BACKUP="$BACKUP_DIR/10-secure-entrypoint.conf.${TIMESTAMP}"
+    root cp -a "$BACKEND_DROPIN" "$UNIT_BACKUP"
+    printf 'backend_override_backup=%s\n' "$UNIT_BACKUP"
   fi
-
-  root install -d -o work-intelligence -g work-intelligence /var/lib/work-intelligence "$REPO_DIR/logs"
-  if root test -e "$DB_PATH"; then
-    root chown work-intelligence:work-intelligence "$DB_PATH"
+  if root test -f "$FRONTEND_DROPIN"; then
+    FRONTEND_BACKUP="$BACKUP_DIR/10-private-backend.conf.${TIMESTAMP}"
+    root cp -a "$FRONTEND_DROPIN" "$FRONTEND_BACKUP"
+    printf 'frontend_override_backup=%s\n' "$FRONTEND_BACKUP"
   fi
-  root install -m 0644 "$REPO_DIR/$UNIT_SOURCE" "/etc/systemd/system/${SERVICE}.service"
+  root install -m 0644 "$REPO_DIR/$VDS_BACKEND_OVERRIDE" "$BACKEND_DROPIN"
+  root install -m 0644 "$REPO_DIR/$VDS_FRONTEND_OVERRIDE" "$FRONTEND_DROPIN"
 fi
 
 root systemctl daemon-reload
@@ -264,8 +267,9 @@ EFFECTIVE_EXEC="$(root systemctl show "$SERVICE" -p ExecStart --value 2>/dev/nul
 grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$EFFECTIVE_EXEC" \
   || fail "effective systemd ExecStart does not use the secure production entrypoint"
 
-root systemctl enable "$SERVICE" >/dev/null
+root systemctl enable "$SERVICE" "$FRONTEND_SERVICE" >/dev/null
 root systemctl restart "$SERVICE"
+root systemctl restart "$FRONTEND_SERVICE"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
@@ -325,9 +329,20 @@ wait_for_health "$LOCAL_API" || {
 
 security_probe "$LOCAL_API" "local"
 
+frontend_proxy_code="$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \
+  "$LOCAL_FRONTEND/api/v1/work-items?tenant_id=smoke-prod")"
+[[ "$frontend_proxy_code" == "200" ]] || fail "local frontend API proxy failed (status=$frontend_proxy_code)"
+printf 'local_frontend_proxy=PASS status=%s\n' "$frontend_proxy_code"
+
 if ((SKIP_PUBLIC == 0)); then
   wait_for_health "$PUBLIC_API" || fail "public health did not become ready"
   security_probe "$PUBLIC_API" "public"
+  public_frontend_code="$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' "$PUBLIC_FRONTEND/")"
+  public_frontend_api_code="$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -w '%{http_code}' \
+    "$PUBLIC_FRONTEND/api/v1/work-items?tenant_id=smoke-prod")"
+  [[ "$public_frontend_code" == "200" ]] || fail "public frontend failed (status=$public_frontend_code)"
+  [[ "$public_frontend_api_code" == "200" ]] || fail "public frontend API proxy failed (status=$public_frontend_api_code)"
+  printf 'public_frontend=PASS root=%s api=%s\n' "$public_frontend_code" "$public_frontend_api_code"
 fi
 
 printf 'deployed_previous_sha=%s\n' "$PREVIOUS_SHA"

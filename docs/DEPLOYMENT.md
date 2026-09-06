@@ -197,13 +197,20 @@ Use TLS at the public edge. The current Aftergraph deployment uses Cloudflare Tu
 
 ### Current Aftergraph VDS Topology
 
-As verified on 2026-09-06:
+Measured on `vmi3517816` on 2026-09-06 after the production security rollout:
 
-- backend: VDS port `8090`, exposed publicly as `https://intel.rendetalje.dk`
-- frontend: VDS port `3001`, exposed publicly as `https://work-intelligence.rendetalje.dk`
-- Cloudflare Tunnel routes the public hostnames to those VDS listeners
+- backend: `172.17.0.1:8090`, exposed as `https://intel.rendetalje.dk` through the named Cloudflare Tunnel
+- frontend: VDS port `3001`, exposed as `https://work-intelligence.rendetalje.dk`
+- frontend API proxy target: `http://172.17.0.1:8090`
+- named tunnel network: `renos-control-edge` (`172.21.0.0/16`)
+- named tunnel origin for the API: `http://172.17.0.1:8090`
+- UFW permits backend `8090/tcp` from `172.21.0.0/16`; the backend no longer listens on every VDS interface
+- SQLite database: `/var/lib/work-intelligence/wi.db`
+- current legacy secret source: `/etc/work-intelligence-webhook.secret`
 
-For that host, set `AFTERGRAPH_PORT=8090` in `/etc/aftergraph/work-intelligence.env`; the generic default above remains `8087` for other installations.
+The VDS-specific systemd overrides are checked in under `deploy/systemd/`. Install them as drop-ins for `work-intelligence.service` and `work-intelligence-web.service`. The generic example above remains loopback-oriented for installations where the reverse proxy runs in the host namespace.
+
+Do not change this VDS backend to `127.0.0.1:8090` while the named tunnel origin remains `172.17.0.1:8090`; that mismatch was reproduced as a public `502`. An obsolete random `trycloudflare.com` quick tunnel was removed after the named tunnel was independently verified.
 
 ---
 

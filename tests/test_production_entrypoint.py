@@ -69,3 +69,16 @@ def test_systemd_documentation_uses_secure_console_script() -> None:
         "ExecStart=/opt/work-intelligence/.venv/bin/python -m aftergraph_work_intelligence.api"
         not in deployment
     )
+
+
+def test_current_vds_contract_uses_private_docker_bridge_listener() -> None:
+    backend = Path("deploy/systemd/work-intelligence-vds.conf").read_text(encoding="utf-8")
+    frontend = Path("deploy/systemd/work-intelligence-web-vds.conf").read_text(encoding="utf-8")
+    deployment = Path("docs/DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert "Environment=AFTERGRAPH_HOST=172.17.0.1" in backend
+    assert "Environment=AFTERGRAPH_PORT=8090" in backend
+    assert "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" in backend
+    assert "Environment=WI_BACKEND_URL=http://172.17.0.1:8090" in frontend
+    assert "http://172.17.0.1:8090" in deployment
+    assert "172.21.0.0/16" in deployment
