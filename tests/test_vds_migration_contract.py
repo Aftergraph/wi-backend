@@ -38,8 +38,10 @@ def test_vds_migration_bootstraps_evidence_secret_only_when_absent() -> None:
 def test_vds_migration_rehomes_python_outside_root_before_service_user_cutover() -> None:
     script = Path("scripts/migrate-production-vds.sh").read_text(encoding="utf-8")
 
-    assert 'RUNTIME_PYTHON_DIR="$REPO_DIR/.runtime-python"' in script
+    assert 'RUNTIME_PYTHON_DIR="/opt/work-intelligence-runtime/python"' in script
+    assert 'VENV_ROOT="/opt/work-intelligence-runtime/venvs"' in script
     assert 'uv python install --install-dir "$RUNTIME_PYTHON_DIR"' in script
     assert "UV_PYTHON_INSTALL_DIR=\"$RUNTIME_PYTHON_DIR\"" in script
     assert 'cp -a "$REPO_DIR/.venv" "$RUN_BACKUP/venv"' in script
-    assert 'runuser -u work-intelligence -- "$REPO_DIR/.venv/bin/aftergraph-work-intelligence" --help' in script
+    assert 'runuser -u work-intelligence -- "$VENV_SLOT/bin/aftergraph-work-intelligence" --help' in script
+    assert 'ln -s "$VENV_SLOT" "$REPO_DIR/.venv"' in script
