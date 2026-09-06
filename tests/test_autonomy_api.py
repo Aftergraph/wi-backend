@@ -209,6 +209,22 @@ class TestAutonomyEndpoint:
             assert data["decision"] == "auto_approve"
             assert data["risk"]["level"] == "low"
 
+    def test_blast_radius_includes_security_and_observability(self):
+        """Expanded blast-radius map must recognize security/ and observability/."""
+        with _client() as client:
+            body = _make_request(
+                changed_files=["src/security/encryption.py", "src/observability/metrics.py"],
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            br = resp.json()["blast_radius"]
+            assert "trust_boundary" in br["affected_surfaces"] or "encryption" in br["affected_surfaces"]
+            assert "metrics" in br["affected_surfaces"] or "logging" in br["affected_surfaces"]
+
     def test_evaluation_persisted_to_audit_trail(self):
         """POST evaluate must append to the autonomy_decisions audit trail."""
         with _client() as client:

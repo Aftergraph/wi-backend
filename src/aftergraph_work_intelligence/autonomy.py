@@ -69,11 +69,15 @@ _BLAST_RADIUS_MAP: dict[str, list[str]] = {
     "src/transitions": ["state_machine", "lifecycle"],
     "src/tasks": ["background_processing", "worker_pool"],
     "src/tracing": ["observability", "telemetry"],
+    "src/contracts": ["api_contracts", "schema_governance"],
+    "src/observability": ["metrics", "logging", "alerting"],
+    "src/security": ["trust_boundary", "encryption", "access_control"],
+    "src/integrations": ["external_apis", "webhooks", "third_party"],
+    "contracts": ["api_contracts", "schema_governance"],
     "Caddyfile": ["reverse_proxy", "tls", "ingress"],
     "docker": ["container_runtime", "deployment"],
     "pyproject.toml": ["dependencies", "build_system"],
     ".github": ["ci_pipeline", "automation"],
-    "contracts": ["api_contracts", "schema_governance"],
 }
 
 
