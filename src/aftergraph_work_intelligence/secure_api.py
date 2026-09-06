@@ -17,6 +17,8 @@ from .publishers import Publisher
 
 _DEFAULT_CORS_ORIGINS = (
     "https://work-intelligence.rendetalje.dk",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
     "http://localhost:3001",
     "http://127.0.0.1:3001",
 )
