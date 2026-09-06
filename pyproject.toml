@@ -7,7 +7,7 @@ dependencies = [
   "fastapi>=0.141,<0.142",
   "uvicorn>=0.48,<0.53",
   "pydantic>=2.13,<3",
-  "psutil>=5.9,<7",
+  "psutil>=5.9,<8",
 ]
 
 [project.optional-dependencies]
