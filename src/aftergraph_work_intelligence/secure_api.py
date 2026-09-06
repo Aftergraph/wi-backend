@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import hmac
 import os
@@ -7,6 +8,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -208,4 +210,18 @@ def create_app(
     return app
 
 
-__all__ = ["ProductionSecurityMiddleware", "create_app"]
+def main() -> None:
+    """Run the fail-closed production application."""
+    parser = argparse.ArgumentParser(description="Aftergraph Work Intelligence V2 (secure)")
+    parser.add_argument("--host", default=os.getenv("AFTERGRAPH_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087")))
+    parser.add_argument("--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db"))
+    args = parser.parse_args()
+    uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port)
+
+
+__all__ = ["ProductionSecurityMiddleware", "create_app", "main"]
+
+
+if __name__ == "__main__":
+    main()
