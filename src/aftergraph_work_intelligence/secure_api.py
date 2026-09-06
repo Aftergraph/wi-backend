@@ -191,18 +191,20 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
                     origin,
                     path,
                 )
-        elif path not in _PUBLIC_PATHS and not self._authorized(request):
-            # Allow webhook HMAC-SHA256 signed requests through to the endpoint
-            if not await self._webhook_authorized(request):
-                return self._finalize(
-                    JSONResponse(
-                        status_code=401,
-                        content={"detail": "invalid or missing credentials"},
-                        headers={"WWW-Authenticate": "Bearer"},
-                    ),
-                    origin,
-                    path,
-                )
+        elif (
+            path not in _PUBLIC_PATHS
+            and not self._authorized(request)
+            and not await self._webhook_authorized(request)
+        ):
+            return self._finalize(
+                JSONResponse(
+                    status_code=401,
+                    content={"detail": "invalid or missing credentials"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                ),
+                origin,
+                path,
+            )
 
         response = await call_next(request)
         return self._finalize(response, origin, path)

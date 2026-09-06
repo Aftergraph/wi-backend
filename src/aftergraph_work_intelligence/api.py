@@ -342,8 +342,8 @@ def _verify_webhook_signature(
     """
     if not signature_header or not webhook_secret:
         return False
-    import hmac as _hmac_mod
     import hashlib as _hl
+    import hmac as _hmac_mod
 
     try:
         if signature_header.startswith("sha256="):

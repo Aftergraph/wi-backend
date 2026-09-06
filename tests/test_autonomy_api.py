@@ -11,7 +11,6 @@ from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.api import create_app
 
-
 WEBHOOK_SECRET = "test-webhook-secret-1234567890"
 
 

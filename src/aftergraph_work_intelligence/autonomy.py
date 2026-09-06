@@ -49,9 +49,7 @@ def _scan_critical_files(
             import re
 
             if re.search(pattern, lowered):
-                if label == "auth":
-                    auth_touched = True
-                elif label == "secret":
+                if label == "auth" or label == "secret":
                     auth_touched = True
                 elif label == "proxy":
                     proxy_touched = True
