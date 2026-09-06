@@ -7,7 +7,6 @@ from aftergraph_work_intelligence.autonomy import (
     evaluate_autonomy,
 )
 
-
 BASE = AutonomyEvaluationInput(
     request_id="adr_12345678",
     tenant_id="default",
