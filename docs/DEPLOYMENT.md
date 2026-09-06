@@ -8,42 +8,42 @@
 git clone https://github.com/Aftergraph/work-intelligence-v2.git
 cd work-intelligence-v2
 
-# Create virtual environment
 python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
+source .venv/bin/activate  # Linux/macOS
 # or
 .venv\Scripts\activate  # Windows
 
-# Install dependencies
 pip install -e ".[dev]"
 ```
 
 ### 2. Run Tests
 
 ```bash
-# Unit tests only
 pytest tests/ -v
 
-# With live RenOS integration
+# Optional live RenOS integration
 RENOS_SESSION_TOKEN=your-token pytest tests/ -v
 ```
 
-### 3. Start Server
+### 3. Start a Local Development Server
+
+The core `api` module remains available for local development and test compatibility. Do not use it as a public production entrypoint.
 
 ```bash
-# Default (127.0.0.1:8087)
+# Default local development server (127.0.0.1:8087)
 python -m aftergraph_work_intelligence.api
 
-# Custom host/port
-python -m aftergraph_work_intelligence.api --host 0.0.0.0 --port 9000
-
-# With authentication
-AFTERGRAPH_API_TOKEN=my-secret-token python -m aftergraph_work_intelligence.api
+# Custom local host/port
+python -m aftergraph_work_intelligence.api --host 127.0.0.1 --port 9000
 ```
+
+For any public or production process, use the fail-closed `aftergraph-work-intelligence` console command documented below.
 
 ---
 
 ## Docker Deployment
+
+The Docker image starts `aftergraph_work_intelligence.secure_api:create_app`, so the public container uses the production security boundary by default.
 
 ### 1. Build Image
 
@@ -53,29 +53,29 @@ docker build -t aftergraph-work-intelligence .
 
 ### 2. Run Container
 
+The container listens on port `8000`.
+
 ```bash
 docker run -d \
-  -p 8087:8087 \
-  -e AFTERGRAPH_API_TOKEN=my-secret-token \
+  -p 8087:8000 \
+  -e AFTERGRAPH_API_TOKEN="$AFTERGRAPH_API_TOKEN" \
+  -e AFTERGRAPH_EVIDENCE_SECRET="$AFTERGRAPH_EVIDENCE_SECRET" \
+  -e AFTERGRAPH_GITHUB_WEBHOOK_SECRET="$AFTERGRAPH_GITHUB_WEBHOOK_SECRET" \
+  -e AFTERGRAPH_CORS_ORIGINS="https://work-intelligence.rendetalje.dk" \
   -e AFTERGRAPH_RATE_LIMIT=120 \
-  -v work-intelligence-data:/app/data \
+  -v work-intelligence-data:/data \
   --name work-intelligence \
   aftergraph-work-intelligence
 ```
 
-### 3. Docker Compose (Full Stack)
+### 3. Docker Compose
+
+`docker-compose.yml` fails closed when the required secrets are missing.
 
 ```bash
-# Start all services
 docker-compose up -d
-
-# Check status
 docker-compose ps
-
-# View logs
 docker-compose logs -f work-intelligence
-
-# Stop all
 docker-compose down
 ```
 
@@ -83,21 +83,44 @@ docker-compose down
 
 ## Production Deployment
 
-### 1. Environment Variables
+### Security Boundary
+
+The canonical public entrypoint is:
 
 ```bash
-# Required
-export AFTERGRAPH_API_TOKEN="your-secure-token-here"
-export AFTERGRAPH_EVIDENCE_SECRET="your-hmac-secret-here"
+aftergraph-work-intelligence
+```
 
-# Optional
-export AFTERGRAPH_DB="/var/lib/work-intelligence/data.db"
-export AFTERGRAPH_HOST="0.0.0.0"
-export AFTERGRAPH_PORT="8087"
-export AFTERGRAPH_RATE_LIMIT="60"
+It resolves to `aftergraph_work_intelligence.secure_api:main` and wraps the core application with the production security middleware. The boundary provides fail-closed authentication, full API-key hash verification, explicit CORS allowlisting, baseline browser security headers, no-store headers for sensitive API responses, and fail-closed GitHub webhook configuration.
 
-# RenOS Integration
-export RENOS_SESSION_TOKEN="your-renos-session-token"
+Do **not** expose `python -m aftergraph_work_intelligence.api` directly to the public network.
+
+### 1. Environment Variables
+
+Store production secrets in a root-owned environment file such as `/etc/aftergraph/work-intelligence.env` rather than embedding them in the unit file.
+
+```bash
+# Required for the current public deployment
+AFTERGRAPH_API_TOKEN=replace-with-strong-token
+AFTERGRAPH_EVIDENCE_SECRET=replace-with-strong-hmac-secret
+AFTERGRAPH_GITHUB_WEBHOOK_SECRET=replace-with-github-webhook-secret
+AFTERGRAPH_CORS_ORIGINS=https://work-intelligence.rendetalje.dk
+
+# Runtime
+AFTERGRAPH_DB=/var/lib/work-intelligence/data.db
+AFTERGRAPH_HOST=127.0.0.1
+AFTERGRAPH_PORT=8087
+AFTERGRAPH_RATE_LIMIT=60
+
+# Optional integrations
+RENOS_SESSION_TOKEN=replace-if-used
+```
+
+Protect the file:
+
+```bash
+sudo chown root:work-intelligence /etc/aftergraph/work-intelligence.env
+sudo chmod 0640 /etc/aftergraph/work-intelligence.env
 ```
 
 ### 2. Systemd Service (Linux)
@@ -107,35 +130,52 @@ Create `/etc/systemd/system/work-intelligence.service`:
 ```ini
 [Unit]
 Description=Aftergraph Work Intelligence V2
-After=network.target
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=work-intelligence
 Group=work-intelligence
 WorkingDirectory=/opt/work-intelligence
-ExecStart=/opt/work-intelligence/.venv/bin/python -m aftergraph_work_intelligence.api
+EnvironmentFile=/etc/aftergraph/work-intelligence.env
+ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence
 Restart=always
 RestartSec=5
-
-Environment=AFTERGRAPH_API_TOKEN=your-token
-Environment=AFTERGRAPH_DB=/var/lib/work-intelligence/data.db
-Environment=AFTERGRAPH_RATE_LIMIT=60
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/work-intelligence /opt/work-intelligence/logs
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-Enable and start:
+Enable and restart:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable work-intelligence
-sudo systemctl start work-intelligence
-sudo systemctl status work-intelligence
+sudo systemctl restart work-intelligence
+sudo systemctl status --no-pager work-intelligence
 ```
 
-### 3. Nginx Reverse Proxy
+Verify the local boundary before changing public routing:
+
+```bash
+curl -fsS http://127.0.0.1:8087/healthz
+curl -i http://127.0.0.1:8087/v1/work-items?tenant_id=smoke-prod
+curl -i -X OPTIONS http://127.0.0.1:8087/v1/observations \
+  -H 'Origin: https://evil.example' \
+  -H 'Access-Control-Request-Method: POST'
+```
+
+Expected: health `200`, protected unauthenticated request `401`, hostile CORS preflight `403`.
+
+### 3. Reverse Proxy
+
+A conventional Nginx deployment can proxy to the loopback listener:
 
 ```nginx
 server {
@@ -153,12 +193,17 @@ server {
 }
 ```
 
-### 4. SSL/TLS (Let's Encrypt)
+Use TLS at the public edge. The current Aftergraph deployment uses Cloudflare Tunnel rather than this generic Nginx example.
 
-```bash
-sudo apt install certbot python3-certbot-nginx
-sudo certbot --nginx -d work-intelligence.yourdomain.com
-```
+### Current Aftergraph VDS Topology
+
+As verified on 2026-09-06:
+
+- backend: VDS port `8090`, exposed publicly as `https://intel.rendetalje.dk`
+- frontend: VDS port `3001`, exposed publicly as `https://work-intelligence.rendetalje.dk`
+- Cloudflare Tunnel routes the public hostnames to those VDS listeners
+
+For that host, set `AFTERGRAPH_PORT=8090` in `/etc/aftergraph/work-intelligence.env`; the generic default above remains `8087` for other installations.
 
 ---
 
@@ -168,7 +213,7 @@ sudo certbot --nginx -d work-intelligence.yourdomain.com
 
 ```bash
 curl http://localhost:8087/healthz
-# {"status": "ok", "service": "aftergraph-work-intelligence", "version": "0.2.0"}
+# {"status": "ok", "service": "aftergraph-work-intelligence", "version": "0.2.0", ...}
 ```
 
 ### Metrics
@@ -184,9 +229,36 @@ curl -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" \
 # Docker
 docker logs -f work-intelligence
 
-# Systemd
+# systemd
 journalctl -u work-intelligence -f
 ```
+
+---
+
+## Production Security Verification
+
+Run these checks against the public hostname after every production restart or deployment:
+
+```bash
+API=https://intel.rendetalje.dk
+
+curl -fsS "$API/healthz"
+
+# Must fail closed without credentials
+curl -i "$API/v1/work-items?tenant_id=smoke-prod"
+
+# Must reject an arbitrary origin
+curl -i -X OPTIONS "$API/v1/observations" \
+  -H 'Origin: https://evil.example' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: authorization,x-api-key,content-type'
+
+# Inspect security headers
+curl -sSI "$API/healthz" | grep -iE \
+  '^(strict-transport-security|content-security-policy|x-content-type-options|x-frame-options|referrer-policy|permissions-policy|cache-control):'
+```
+
+A production deployment is not considered verified until these checks pass against the public hostname. Source-level CI is necessary, but it does not prove the VDS is running the new revision.
 
 ---
 
@@ -195,7 +267,6 @@ journalctl -u work-intelligence -f
 ### Database Backup
 
 ```bash
-# SQLite backup
 cp /var/lib/work-intelligence/data.db /backup/work-intelligence-$(date +%Y%m%d).db
 
 # Or using sqlite3
@@ -205,13 +276,8 @@ sqlite3 /var/lib/work-intelligence/data.db ".backup /backup/work-intelligence-$(
 ### Database Recovery
 
 ```bash
-# Stop service
 sudo systemctl stop work-intelligence
-
-# Restore database
 cp /backup/work-intelligence-20260905.db /var/lib/work-intelligence/data.db
-
-# Start service
 sudo systemctl start work-intelligence
 ```
 
@@ -223,16 +289,16 @@ sudo systemctl start work-intelligence
 
 For multiple instances behind a load balancer:
 
-1. Use shared SQLite (NFS) or migrate to PostgreSQL
-2. Configure same `AFTERGRAPH_API_TOKEN` across all instances
-3. Use same `AFTERGRAPH_EVIDENCE_SECRET` for consistent HMAC signatures
-4. Rate limiting is per-IP, so load balancer should forward `X-Forwarded-For`
+1. Move from node-local SQLite to a datastore designed for multi-writer access before scaling write traffic horizontally.
+2. Configure the same `AFTERGRAPH_API_TOKEN` across instances.
+3. Use the same `AFTERGRAPH_EVIDENCE_SECRET` for consistent HMAC signatures.
+4. Preserve trusted client-address information at the proxy boundary before relying on IP-based rate limiting.
 
 ### Vertical Scaling
 
-- Increase `AFTERGRAPH_RATE_LIMIT` for higher throughput
-- Allocate more memory for SQLite WAL mode
-- Use SSD for database storage
+- Increase `AFTERGRAPH_RATE_LIMIT` only after measuring legitimate traffic.
+- Allocate sufficient memory for the API, task queue, and SQLite cache.
+- Use durable SSD-backed storage for the database.
 
 ---
 
@@ -240,41 +306,53 @@ For multiple instances behind a load balancer:
 
 ### Common Issues
 
-**"Rate limit exceeded"**
-- Increase `AFTERGRAPH_RATE_LIMIT` or wait 1 minute
-- Check for runaway clients
+**`invalid or missing credentials`**
+- Verify `AFTERGRAPH_API_TOKEN` or the API key is present.
+- Check `Authorization: Bearer <token>` formatting.
+- Confirm the public process is running the secure entrypoint.
 
-**"Invalid or missing bearer token"**
-- Verify `AFTERGRAPH_API_TOKEN` is set
-- Check Authorization header format: `Bearer <token>`
+**GitHub webhook returns `503`**
+- `AFTERGRAPH_GITHUB_WEBHOOK_SECRET` is absent in secure mode.
+- Configure the secret and restart the service.
 
-**"No publisher destinations configured"**
-- Set `AFTERGRAPH_PUBLISHER=renos` or `AFTERGRAPH_PUBLISHER=works`
-- Ensure RenOS/WORKS endpoints are accessible
+**Hostile CORS origin is accepted**
+- The running service is stale or bypassing `secure_api`.
+- Check `systemctl cat work-intelligence` and confirm `ExecStart` uses `aftergraph-work-intelligence`.
+- Restart only after the deployed checkout/package matches the intended revision.
+
+**`No publisher destinations configured`**
+- Set `AFTERGRAPH_PUBLISHER=renos` or `AFTERGRAPH_PUBLISHER=works` as required.
+- Ensure the configured destination is reachable.
 
 **Database locked**
-- Check for concurrent access
-- Ensure proper file permissions
-- Consider migrating to PostgreSQL for high concurrency
+- Check for concurrent writers.
+- Verify file ownership and permissions.
+- Do not use shared SQLite/NFS as a multi-writer scaling strategy.
 
 ### Debug Mode
 
+For production-like debugging, keep the secure boundary:
+
 ```bash
-# Enable debug logging
 export AFTERGRAPH_LOG_LEVEL=DEBUG
-python -m aftergraph_work_intelligence.api
+aftergraph-work-intelligence
 ```
+
+Use `python -m aftergraph_work_intelligence.api` only for isolated local development.
 
 ---
 
 ## Security Considerations
 
-1. **Token Rotation**: Rotate `AFTERGRAPH_API_TOKEN` periodically
-2. **HMAC Secret**: Use strong, random secret for `AFTERGRAPH_EVIDENCE_SECRET`
-3. **Rate Limiting**: Adjust based on expected traffic
-4. **Database Permissions**: Restrict file permissions on SQLite database
-5. **Network Security**: Use HTTPS in production (Nginx + Let's Encrypt)
-6. **Logging**: Monitor logs for suspicious activity
+1. **Fail closed**: Public traffic must enter through `secure_api`.
+2. **Token rotation**: Rotate `AFTERGRAPH_API_TOKEN` and API keys through a controlled process.
+3. **Webhook HMAC**: Configure and rotate `AFTERGRAPH_GITHUB_WEBHOOK_SECRET` deliberately.
+4. **Evidence HMAC**: Use a strong random `AFTERGRAPH_EVIDENCE_SECRET`.
+5. **CORS**: Use explicit production origins. Never deploy `*` with credentialed CORS.
+6. **Secrets**: Keep secrets out of source, compose files, unit files, and shell history.
+7. **Database permissions**: Restrict SQLite data and backup permissions.
+8. **TLS**: Terminate HTTPS at a trusted edge or reverse proxy.
+9. **Verification**: Re-run the public security probe after every deployment.
 
 ---
 

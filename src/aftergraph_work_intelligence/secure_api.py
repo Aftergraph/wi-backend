@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import hashlib
 import hmac
 import os
@@ -7,6 +8,7 @@ from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -185,16 +187,21 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
 
 
 def create_app(
-    db_path: str | Path = "./aftergraph-work-intelligence.db",
+    db_path: str | Path | None = None,
     api_token: str | None = None,
     publisher: Publisher | None = None,
     policy_store: PolicyStore | None = None,
     evidence_secret: str | None = None,
 ) -> FastAPI:
     """Create the public/production application with fail-closed security."""
+    resolved_db_path = (
+        db_path
+        if db_path is not None
+        else os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db")
+    )
     resolved_token = api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
     app = create_core_app(
-        db_path=db_path,
+        db_path=resolved_db_path,
         api_token=resolved_token,
         publisher=publisher,
         policy_store=policy_store,
@@ -208,4 +215,18 @@ def create_app(
     return app
 
 
-__all__ = ["ProductionSecurityMiddleware", "create_app"]
+def main() -> None:
+    """Run the fail-closed production application."""
+    parser = argparse.ArgumentParser(description="Aftergraph Work Intelligence V2 (secure)")
+    parser.add_argument("--host", default=os.getenv("AFTERGRAPH_HOST", "127.0.0.1"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087")))
+    parser.add_argument("--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db"))
+    args = parser.parse_args()
+    uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port)
+
+
+__all__ = ["ProductionSecurityMiddleware", "create_app", "main"]
+
+
+if __name__ == "__main__":
+    main()

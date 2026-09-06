@@ -1,8 +1,7 @@
-version: '3.8'
-
 services:
   work-intelligence:
     build: .
+    init: true
     ports:
       - "8000:8000"
     environment:
@@ -10,12 +9,24 @@ services:
       - AFTERGRAPH_EVIDENCE_SECRET=${AFTERGRAPH_EVIDENCE_SECRET:?AFTERGRAPH_EVIDENCE_SECRET is required}
       - AFTERGRAPH_GITHUB_WEBHOOK_SECRET=${AFTERGRAPH_GITHUB_WEBHOOK_SECRET:?AFTERGRAPH_GITHUB_WEBHOOK_SECRET is required}
       - AFTERGRAPH_CORS_ORIGINS=${AFTERGRAPH_CORS_ORIGINS:-https://work-intelligence.rendetalje.dk}
+      - AFTERGRAPH_DB=/data/aftergraph-work-intelligence.db
       - AFTERGRAPH_RATE_LIMIT=${AFTERGRAPH_RATE_LIMIT:-60}
     volumes:
       - data:/data
+    tmpfs:
+      - /tmp
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; r=httpx.get('http://localhost:8000/healthz'); r.raise_for_status()"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5).read()"
       interval: 30s
       timeout: 10s
       retries: 3
