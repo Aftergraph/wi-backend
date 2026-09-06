@@ -187,16 +187,21 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
 
 
 def create_app(
-    db_path: str | Path = "./aftergraph-work-intelligence.db",
+    db_path: str | Path | None = None,
     api_token: str | None = None,
     publisher: Publisher | None = None,
     policy_store: PolicyStore | None = None,
     evidence_secret: str | None = None,
 ) -> FastAPI:
     """Create the public/production application with fail-closed security."""
+    resolved_db_path = (
+        db_path
+        if db_path is not None
+        else os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db")
+    )
     resolved_token = api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
     app = create_core_app(
-        db_path=db_path,
+        db_path=resolved_db_path,
         api_token=resolved_token,
         publisher=publisher,
         policy_store=policy_store,
