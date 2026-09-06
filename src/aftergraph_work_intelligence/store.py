@@ -94,8 +94,8 @@ CREATE TABLE IF NOT EXISTS intake_transitions (
 );
 CREATE INDEX IF NOT EXISTS idx_intake_transitions_work
 ON intake_transitions(work_item_id, at ASC);
-CREATE INDEX IF NOT EXISTS idx_intake_transitions_idempotency
-ON intake_transitions(idempotency_key);
+-- ponytail: idempotency index lives in migration v5, not here — the schema
+-- executes before migrations on existing DBs, where the column may not exist yet.
 
 CREATE TABLE IF NOT EXISTS tenant_policies (
     tenant_id TEXT PRIMARY KEY,
