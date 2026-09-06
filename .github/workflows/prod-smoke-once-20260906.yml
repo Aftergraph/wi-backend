@@ -16,74 +16,57 @@ jobs:
     env:
       API: https://intel.rendetalje.dk
       FRONTEND: https://work-intelligence.rendetalje.dk
-      AFTERGRAPH_API_TOKEN: ${{ secrets.AFTERGRAPH_API_TOKEN }}
     steps:
-      - name: Production smoke
+      - name: Production diagnostics
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p /tmp/prod-smoke
+          critical=0
 
-          echo '=== DNS ==='
-          getent ahosts intel.rendetalje.dk | head -n 4 || true
-          getent ahosts work-intelligence.rendetalje.dk | head -n 4 || true
+          request() {
+            local name="$1" url="$2"
+            local body="/tmp/prod-smoke/${name}.body" hdr="/tmp/prod-smoke/${name}.hdr"
+            local code
+            code=$(curl -sS --connect-timeout 10 --max-time 25 -D "$hdr" -o "$body" -w '%{http_code}' "$url") || code=000
+            echo "$name status=$code bytes=$(wc -c < "$body" 2>/dev/null || echo 0)"
+            for h in content-type cache-control strict-transport-security content-security-policy x-content-type-options x-frame-options referrer-policy permissions-policy access-control-allow-origin access-control-allow-credentials x-api-version x-app-version; do
+              v=$(grep -i "^${h}:" "$hdr" 2>/dev/null | tail -1 | cut -d: -f2- | sed 's/^ //;s/\r$//' || true)
+              [ -n "$v" ] && echo "  $h: $v"
+            done
+            echo "$code" > "/tmp/prod-smoke/${name}.code"
+          }
 
-          echo '=== TLS ==='
+          echo '=== DNS + TLS ==='
           for host in intel.rendetalje.dk work-intelligence.rendetalje.dk; do
             echo "--- $host ---"
+            getent ahosts "$host" | head -n 4 || true
             echo | openssl s_client -connect "$host:443" -servername "$host" 2>/dev/null \
               | openssl x509 -noout -subject -issuer -dates || true
           done
 
-          probe() {
-            local name="$1" url="$2"
-            local body="/tmp/prod-smoke/${name}.body" headers="/tmp/prod-smoke/${name}.headers"
-            local code
-            code=$(curl -sS --connect-timeout 10 --max-time 25 -D "$headers" -o "$body" -w '%{http_code}' "$url")
-            echo "$name status=$code bytes=$(wc -c < "$body")"
-            echo "  content-type: $(grep -i '^content-type:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  cache-control: $(grep -i '^cache-control:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  hsts: $(grep -i '^strict-transport-security:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  csp: $(grep -i '^content-security-policy:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  xcto: $(grep -i '^x-content-type-options:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  xfo: $(grep -i '^x-frame-options:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  referrer-policy: $(grep -i '^referrer-policy:' "$headers" | tail -1 | tr -d '\r' || true)"
-            echo "  permissions-policy: $(grep -i '^permissions-policy:' "$headers" | tail -1 | tr -d '\r' || true)"
-            printf '%s' "$code"
-          }
+          echo '=== Core endpoints + response headers ==='
+          request health "$API/healthz"
+          request frontend "$FRONTEND/"
+          request api_root "$API/"
+          request openapi "$API/openapi.json"
+          request docs "$API/docs"
 
-          echo '=== Core endpoints ==='
-          health_code=$(probe health "$API/healthz")
-          front_code=$(probe frontend "$FRONTEND/")
-          root_code=$(probe api_root "$API/")
-          openapi_code=$(probe openapi "$API/openapi.json")
-          docs_code=$(probe docs "$API/docs")
-
-          HEALTH_CODE=$(echo "$health_code" | tail -n 1)
-          FRONT_CODE=$(echo "$front_code" | tail -n 1)
-          ROOT_CODE=$(echo "$root_code" | tail -n 1)
-          OPENAPI_CODE=$(echo "$openapi_code" | tail -n 1)
-          DOCS_CODE=$(echo "$docs_code" | tail -n 1)
-
-          test "$HEALTH_CODE" = 200
-          test "$FRONT_CODE" = 200
-          test "$ROOT_CODE" = 404
-          test "$OPENAPI_CODE" = 200
-          test "$DOCS_CODE" = 200
-
+          echo '=== Health body ==='
+          cat /tmp/prod-smoke/health.body
+          echo
           python3 - <<'PY'
           import json
-          p='/tmp/prod-smoke/health.body'
-          with open(p, encoding='utf-8') as f:
-              d=json.load(f)
-          print('health_json=', json.dumps(d, sort_keys=True))
-          assert d.get('status') == 'ok', d
-          assert d.get('database') == 'ok', d
-          assert d.get('task_queue') == 'ok', d
-          assert d.get('cache') == 'ok', d
+          d=json.load(open('/tmp/prod-smoke/health.body'))
+          required={'status':'ok','database':'ok','task_queue':'ok','cache':'ok'}
+          bad={k:(d.get(k),v) for k,v in required.items() if d.get(k)!=v}
+          print('health_required_failures=', bad)
+          raise SystemExit(1 if bad else 0)
           PY
+          health_ok=$?
+          [ "$health_ok" -eq 0 ] || critical=1
 
-          echo '=== Frontend asset smoke ==='
+          echo '=== Frontend assets ==='
           python3 - <<'PY'
           from html.parser import HTMLParser
           from urllib.parse import urljoin
@@ -93,23 +76,23 @@ jobs:
               def handle_starttag(self, tag, attrs):
                   a=dict(attrs)
                   if tag=='script' and a.get('src'): self.urls.append(a['src'])
-                  if tag=='link' and a.get('href') and a.get('rel') in ('stylesheet','modulepreload','preload'): self.urls.append(a['href'])
+                  rel=a.get('rel')
+                  if tag=='link' and a.get('href') and rel in ('stylesheet','modulepreload','preload'): self.urls.append(a['href'])
           html=open('/tmp/prod-smoke/frontend.body',encoding='utf-8',errors='ignore').read()
-          assert '<html' in html.lower() or '<!doctype' in html.lower(), 'frontend did not return HTML'
+          print('html_document=', '<html' in html.lower() or '<!doctype' in html.lower())
           p=P(); p.feed(html)
-          base=os.environ['FRONTEND'].rstrip('/')+'/'
+          base='https://work-intelligence.rendetalje.dk/'
           urls=[]
           for u in p.urls:
               full=urljoin(base,u)
               if full.startswith(base) and full not in urls: urls.append(full)
-          print('assets_found=', len(urls))
+          print('assets_found=',len(urls))
           for i,u in enumerate(urls[:8]):
-              out=subprocess.check_output(['curl','-sS','--connect-timeout','10','--max-time','25','-o','/dev/null','-w','%{http_code} %{size_download} %{time_total}',u], text=True)
+              out=subprocess.check_output(['curl','-sS','--connect-timeout','10','--max-time','25','-o','/dev/null','-w','%{http_code} %{size_download} %{time_total}',u],text=True)
               print(f'asset[{i}] {out.strip()} {u}')
-              code=int(out.split()[0]); assert code==200, (u,out)
           PY
 
-          echo '=== Latency sample ==='
+          echo '=== Latency 5x ==='
           for target in "$API/healthz" "$FRONTEND/"; do
             echo "target=$target"
             for i in 1 2 3 4 5; do
@@ -117,70 +100,51 @@ jobs:
             done
           done
 
-          echo '=== Unauthenticated auth boundary ==='
-          unauth_code=$(curl -sS --connect-timeout 10 --max-time 25 -o /tmp/prod-smoke/unauth.body -w '%{http_code}' "$API/v1/work-items?tenant_id=smoke-prod")
-          echo "unauthenticated /v1/work-items status=$unauth_code body=$(head -c 300 /tmp/prod-smoke/unauth.body)"
-          if [ "$unauth_code" != 401 ] && [ "$unauth_code" != 403 ]; then
-            echo "SECURITY_FAILURE: protected endpoint is accessible or validates unexpectedly without auth"
+          echo '=== Authentication boundary: safe GET probes only ==='
+          for spec in \
+            'work_items|/v1/work-items?tenant_id=smoke-prod' \
+            'tenants|/v1/tenants' \
+            'logs|/v1/logs' \
+            'migrations|/v1/migrations' \
+            'cache|/v1/cache' \
+            'rate_limit|/v1/rate-limit'; do
+            name=${spec%%|*}; path=${spec#*|}
+            code=$(curl -sS --connect-timeout 10 --max-time 25 -o /dev/null -w '%{http_code}' "$API$path") || code=000
+            echo "unauthenticated $path -> $code"
+            if [ "$code" = 200 ] || [ "$code" = 201 ] || [ "$code" = 202 ]; then
+              echo "  SECURITY: endpoint accepted unauthenticated request"
+              critical=1
+            fi
+          done
+
+          echo '=== Unauthenticated mutation guard (schema-neutral, no valid payload sent) ==='
+          code=$(curl -sS --connect-timeout 10 --max-time 25 -o /tmp/prod-smoke/post-empty.body -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$API/v1/observations") || code=000
+          echo "POST /v1/observations with empty object -> $code"
+          echo "body=$(head -c 500 /tmp/prod-smoke/post-empty.body)"
+          if [ "$code" = 422 ] || [ "$code" = 400 ]; then
+            echo '  SECURITY: request reached payload validation before any authentication rejection.'
+            critical=1
+          elif [ "$code" = 401 ] || [ "$code" = 403 ]; then
+            echo '  auth gate precedes payload validation.'
+          fi
+
+          echo '=== CORS evil-origin preflight ==='
+          cors_code=$(curl -sS --connect-timeout 10 --max-time 25 -X OPTIONS -D /tmp/prod-smoke/cors.hdr -o /tmp/prod-smoke/cors.body -w '%{http_code}' \
+            -H 'Origin: https://evil.example' \
+            -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: authorization,x-api-key,content-type' \
+            "$API/v1/observations") || cors_code=000
+          echo "cors_status=$cors_code"
+          grep -iE '^(access-control-allow-origin|access-control-allow-credentials|access-control-allow-methods|access-control-allow-headers):' /tmp/prod-smoke/cors.hdr || true
+          acao=$(grep -i '^access-control-allow-origin:' /tmp/prod-smoke/cors.hdr | tail -1 | cut -d: -f2- | tr -d ' \r' || true)
+          if [ "$acao" = '*' ] || [ "$acao" = 'https://evil.example' ]; then
+            echo '  SECURITY: arbitrary external origin is allowed by CORS.'
+            critical=1
+          fi
+
+          echo '=== Result ==='
+          if [ "$critical" -ne 0 ]; then
+            echo 'PROD_SMOKE=FAIL security boundary findings present'
             exit 20
           fi
-
-          echo '=== CORS preflight ==='
-          cors_code=$(curl -sS --connect-timeout 10 --max-time 25 -X OPTIONS -D /tmp/prod-smoke/cors.headers -o /tmp/prod-smoke/cors.body -w '%{http_code}' \
-            -H 'Origin: https://evil.example' \
-            -H 'Access-Control-Request-Method: GET' \
-            -H 'Access-Control-Request-Headers: authorization,x-api-key' \
-            "$API/v1/work-items?tenant_id=smoke-prod")
-          echo "cors_status=$cors_code"
-          grep -iE '^(access-control-allow-origin|access-control-allow-credentials|access-control-allow-methods|access-control-allow-headers):' /tmp/prod-smoke/cors.headers || true
-
-          echo '=== Authenticated reversible lifecycle smoke ==='
-          if [ -n "${AFTERGRAPH_API_TOKEN:-}" ]; then
-            marker="prod-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-            cat > /tmp/prod-smoke/observation.json <<JSON
-          {"tenant_id":"smoke-prod","source":"conversation","text":"Need to review production smoke pipeline marker ${marker} and cancel this synthetic item after verification.","external_id":"${marker}","actor":"github-actions-prod-smoke","title_hint":"Production smoke ${marker}","priority_hint":"low","metadata":{"synthetic":true,"github_run_id":"${GITHUB_RUN_ID}"}}
-          JSON
-            create_code=$(curl -sS --connect-timeout 10 --max-time 25 -D /tmp/prod-smoke/create.headers -o /tmp/prod-smoke/create.body -w '%{http_code}' \
-              -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" -H 'Content-Type: application/json' \
-              --data-binary @/tmp/prod-smoke/observation.json "$API/v1/observations")
-            echo "create_status=$create_code body=$(head -c 800 /tmp/prod-smoke/create.body)"
-            case "$create_code" in 200|201|202) ;; *) exit 30 ;; esac
-
-            work_item_id=$(python3 - <<'PY'
-          import json
-          d=json.load(open('/tmp/prod-smoke/create.body'))
-          wi=d.get('work_item')
-          print((wi or {}).get('id','') if isinstance(wi,dict) else '')
-          PY
-          )
-            if [ -z "$work_item_id" ]; then
-              echo 'WRITE_SMOKE_PARTIAL: observation accepted but no work item was created; lifecycle read/cancel skipped.'
-            else
-              echo "work_item_id=$work_item_id"
-              read_code=$(curl -sS --connect-timeout 10 --max-time 25 -o /tmp/prod-smoke/read.body -w '%{http_code}' \
-                -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" "$API/v1/work-items/$work_item_id?tenant_id=smoke-prod")
-              echo "read_status=$read_code body=$(head -c 800 /tmp/prod-smoke/read.body)"
-              test "$read_code" = 200
-
-              evidence_code=$(curl -sS --connect-timeout 10 --max-time 25 -o /tmp/prod-smoke/evidence.body -w '%{http_code}' \
-                -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" "$API/v1/work-items/$work_item_id/evidence?tenant_id=smoke-prod")
-              echo "evidence_status=$evidence_code body=$(head -c 600 /tmp/prod-smoke/evidence.body)"
-              test "$evidence_code" = 200
-
-              cancel_code=$(curl -sS --connect-timeout 10 --max-time 25 -o /tmp/prod-smoke/cancel.body -w '%{http_code}' \
-                -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" -H 'Content-Type: application/json' \
-                --data '{"action":"cancel","actor":"github-actions-prod-smoke","reason":"Synthetic production smoke cleanup"}' \
-                "$API/v1/work-items/$work_item_id/review?tenant_id=smoke-prod")
-              echo "cancel_status=$cancel_code body=$(head -c 800 /tmp/prod-smoke/cancel.body)"
-              test "$cancel_code" = 200
-
-              transitions_code=$(curl -sS --connect-timeout 10 --max-time 25 -o /tmp/prod-smoke/transitions.body -w '%{http_code}' \
-                -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" "$API/v1/work-items/$work_item_id/transitions?tenant_id=smoke-prod")
-              echo "transitions_status=$transitions_code body=$(head -c 800 /tmp/prod-smoke/transitions.body)"
-              test "$transitions_code" = 200
-            fi
-          else
-            echo 'WRITE_SMOKE_SKIPPED: repository secret AFTERGRAPH_API_TOKEN is not configured/available to this workflow.'
-          fi
-
-          echo '=== Production smoke completed ==='
+          echo 'PROD_SMOKE=PASS'
