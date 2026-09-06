@@ -15,7 +15,6 @@ from .api import create_app as create_core_app
 from .policy import PolicyStore
 from .publishers import Publisher
 
-
 _DEFAULT_CORS_ORIGINS = (
     "https://work-intelligence.rendetalje.dk",
     "http://localhost:3001",
