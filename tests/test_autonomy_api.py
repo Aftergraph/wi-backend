@@ -1,12 +1,18 @@
 """E2E test: POST /v1/autonomy/decisions/evaluate through FastAPI."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import uuid
 from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.api import create_app
+
+
+WEBHOOK_SECRET = "test-webhook-secret-1234567890"
 
 
 def _make_request(**overrides: object) -> dict:
@@ -35,6 +41,19 @@ def _client():
     app = create_app(db_path=":memory:", api_token="test-token")
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
+
+
+@contextmanager
+def _client_with_webhook():
+    app = create_app(db_path=":memory:", api_token="test-token", webhook_secret=WEBHOOK_SECRET)
+    with TestClient(app, raise_server_exceptions=False) as c:
+        yield c
+
+
+def _sign_payload(body: dict, secret: str = WEBHOOK_SECRET) -> str:
+    raw = json.dumps(body, separators=(",", ":")).encode()
+    sig = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+    return f"sha256={sig}"
 
 
 class TestAutonomyEndpoint:
@@ -296,4 +315,51 @@ class TestAutonomyEndpoint:
     def test_history_requires_auth(self):
         with _client() as client:
             resp = client.get("/v1/autonomy/decisions/history")
+            assert resp.status_code == 401
+
+    def test_webhook_valid_signature_authenticates(self):
+        """A valid HMAC-SHA256 signature must authenticate the request."""
+        with _client_with_webhook() as client:
+            body = _make_request()
+            signature = _sign_payload(body)
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"X-Hub-Signature-256": signature},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["decision"] == "auto_approve"
+
+    def test_webhook_invalid_signature_rejected(self):
+        """An invalid HMAC signature must be rejected with 401."""
+        with _client_with_webhook() as client:
+            body = _make_request()
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"X-Hub-Signature-256": "sha256=deadbeef" * 4},
+            )
+            assert resp.status_code == 401
+
+    def test_webhook_missing_signature_rejected(self):
+        """Missing signature must be rejected when webhook secret is configured."""
+        with _client_with_webhook() as client:
+            body = _make_request()
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+            )
+            assert resp.status_code == 401
+
+    def test_webhook_tampered_body_rejected(self):
+        """A valid signature over a different body must be rejected."""
+        with _client_with_webhook() as client:
+            body = _make_request()
+            signature = _sign_payload(body)
+            tampered = _make_request(request_id=f"adr_tampered{uuid.uuid4().hex[:10]}")
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=tampered,
+                headers={"X-Hub-Signature-256": signature},
+            )
             assert resp.status_code == 401

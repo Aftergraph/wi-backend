@@ -329,6 +329,37 @@ class AutonomyEvaluateRequest(BaseModel):
     changed_files: list[str] = Field(default_factory=list, max_length=2000)
 
 
+def _verify_webhook_signature(
+    request_body: bytes,
+    signature_header: str | None,
+    webhook_secret: str | None,
+) -> bool:
+    """Verify HMAC-SHA256 webhook signature.
+
+    Supports both ``sha256=<hex>`` (GitHub-style) and raw hex formats.
+    Returns True if the signature is valid, False otherwise.  This is a
+    fail-closed helper: any parsing or comparison error returns False.
+    """
+    if not signature_header or not webhook_secret:
+        return False
+    import hmac as _hmac_mod
+    import hashlib as _hl
+
+    try:
+        if signature_header.startswith("sha256="):
+            expected = bytes.fromhex(signature_header[7:])
+        else:
+            expected = bytes.fromhex(signature_header)
+        computed = _hmac_mod.new(
+            webhook_secret.encode(),
+            request_body,
+            _hl.sha256,
+        ).digest()
+        return _hmac_mod.compare_digest(computed, expected)
+    except Exception:
+        return False
+
+
 def _persist_autonomy_decision(
     store: SQLiteStore,
     payload: AutonomyEvaluateRequest,
@@ -387,6 +418,7 @@ def create_app(
     publisher: Publisher | None = None,
     policy_store: PolicyStore | None = None,
     evidence_secret: str | None = None,
+    webhook_secret: str | None = None,
 ) -> FastAPI:
     db_path = Path(db_path)
     configured_token = api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
@@ -414,6 +446,10 @@ def create_app(
         app.state.publisher = configured_publisher
         app.state.metrics = MetricsRecorder(store)
         app.state.evidence_secret = configured_evidence_secret
+        configured_webhook_secret = webhook_secret if webhook_secret is not None else os.getenv(
+            "AFTERGRAPH_WEBHOOK_SECRET"
+        )
+        app.state.webhook_secret = configured_webhook_secret
         # Initialize background task queue
         task_queue = create_task_queue()
         app.state.task_queue = task_queue
@@ -695,19 +731,25 @@ Production-grade observation → WorkItem inference engine.
             },
         })
 
-    def auth(
+    async def auth(
         request: Request,
         authorization: str | None = Header(default=None),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+        x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     ) -> None:
-        """Authenticate via Bearer token OR API key. Returns auth context."""
+        """Authenticate via Bearer token, API key, OR webhook HMAC-SHA256 signature.
+
+        The webhook path is only available when a webhook secret is configured
+        and the autonomy-specific endpoint provides the raw body.  Fail-closed:
+        any invalid signature returns 401.
+        """
         # Bearer token (master token)
         if configured_token and authorization == f"Bearer {configured_token}":
             request.state.auth_method = "bearer"
             request.state.auth_scopes = ["admin", "read", "write", "delete"]
             return
 
-        # API key authentication: compare the full secret hash, never only its public prefix.
+        # API key authentication
         if x_api_key and x_api_key.startswith("ak_") and len(x_api_key) >= 16:
             prefix = x_api_key[:12]
             candidate_hash = _hashlib.sha256(x_api_key.encode()).hexdigest()
@@ -729,6 +771,18 @@ Production-grade observation → WorkItem inference engine.
                 request.state.auth_method = "api_key"
                 request.state.auth_scopes = ["read", "write"]
                 return
+
+        # Webhook HMAC-SHA256 signature (autonomy endpoint only)
+        webhook_secret = getattr(request.app.state, "webhook_secret", None)
+        if webhook_secret and x_hub_signature_256:
+            try:
+                body = await request.body()
+                if _verify_webhook_signature(body, x_hub_signature_256, webhook_secret):
+                    request.state.auth_method = "webhook"
+                    request.state.auth_scopes = ["read", "write"]
+                    return
+            except Exception:
+                pass
 
         # No valid auth
         if configured_token:
