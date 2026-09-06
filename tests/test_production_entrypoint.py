@@ -3,6 +3,8 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from aftergraph_work_intelligence import secure_api
 
 
@@ -16,6 +18,19 @@ def test_console_script_targets_secure_production_boundary() -> None:
 
 def test_secure_module_exposes_cli_main() -> None:
     assert callable(getattr(secure_api, "main", None))
+
+
+def test_secure_factory_honors_aftergraph_db_when_path_is_omitted(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_db = tmp_path / "data" / "from-env.db"
+    monkeypatch.setenv("AFTERGRAPH_DB", str(env_db))
+
+    app = secure_api.create_app(api_token="test-token")
+    with TestClient(app) as client:
+        assert client.get("/healthz").status_code == 200
+
+    assert env_db.exists()
+    assert not (tmp_path / "aftergraph-work-intelligence.db").exists()
 
 
 def test_docker_entrypoint_targets_secure_factory() -> None:
