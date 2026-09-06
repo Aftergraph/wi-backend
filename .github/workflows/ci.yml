@@ -41,3 +41,67 @@ jobs:
         with:
           files: ./coverage.xml
           fail_ci_if_error: false
+
+  production-container-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build production image
+        run: docker build --tag aftergraph-work-intelligence:ci .
+
+      - name: Verify fail-closed production boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker run -d \
+            --name aftergraph-wi-ci \
+            -p 18087:8000 \
+            -e AFTERGRAPH_API_TOKEN=ci-master-token \
+            -e AFTERGRAPH_EVIDENCE_SECRET=ci-evidence-secret \
+            -e AFTERGRAPH_GITHUB_WEBHOOK_SECRET=ci-github-webhook-secret \
+            -e AFTERGRAPH_CORS_ORIGINS=https://work-intelligence.rendetalje.dk \
+            aftergraph-work-intelligence:ci
+
+          cleanup() {
+            docker logs aftergraph-wi-ci || true
+            docker rm -f aftergraph-wi-ci || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18087/healthz >/tmp/health.json; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "$ready" = 1
+
+          protected_code=$(curl -sS -o /tmp/protected.json -w '%{http_code}' \
+            'http://127.0.0.1:18087/v1/work-items?tenant_id=ci')
+          test "$protected_code" = 401
+
+          cors_code=$(curl -sS -o /tmp/cors.json -w '%{http_code}' -X OPTIONS \
+            -H 'Origin: https://evil.example' \
+            -H 'Access-Control-Request-Method: POST' \
+            -H 'Access-Control-Request-Headers: authorization,x-api-key,content-type' \
+            http://127.0.0.1:18087/v1/observations)
+          test "$cors_code" = 403
+
+          curl -sS -D /tmp/headers.txt -o /dev/null http://127.0.0.1:18087/healthz
+          for header in \
+            strict-transport-security \
+            content-security-policy \
+            x-content-type-options \
+            x-frame-options \
+            referrer-policy \
+            permissions-policy; do
+            grep -qi "^${header}:" /tmp/headers.txt
+          done
+
+          echo 'PRODUCTION_CONTAINER_SMOKE=PASS'
