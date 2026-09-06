@@ -26,14 +26,20 @@ def test_vds_migration_is_reversible_and_preserves_legacy_secrets() -> None:
     assert "secret values are never printed" in script.lower()
 
 
-def test_vds_migration_requires_evidence_signing_secret() -> None:
+def test_vds_migration_bootstraps_evidence_secret_only_when_absent() -> None:
     script = Path("scripts/migrate-production-vds.sh").read_text(encoding="utf-8")
 
     assert '"AFTERGRAPH_EVIDENCE_SECRET"' in script
+    assert "secrets.token_urlsafe" in script
+    assert "evidence_secret=preserved" in script
+    assert "evidence_secret=generated" in script
 
 
-def test_vds_migration_proves_service_identity_can_execute_runtime() -> None:
+def test_vds_migration_rehomes_python_outside_root_before_service_user_cutover() -> None:
     script = Path("scripts/migrate-production-vds.sh").read_text(encoding="utf-8")
 
-    assert "runuser -u work-intelligence" in script
-    assert '"$REPO_DIR/.venv/bin/aftergraph-work-intelligence" --help' in script
+    assert 'RUNTIME_PYTHON_DIR="$REPO_DIR/.runtime-python"' in script
+    assert 'uv python install --install-dir "$RUNTIME_PYTHON_DIR"' in script
+    assert "UV_PYTHON_INSTALL_DIR=\"$RUNTIME_PYTHON_DIR\"" in script
+    assert 'cp -a "$REPO_DIR/.venv" "$RUN_BACKUP/venv"' in script
+    assert 'runuser -u work-intelligence -- "$REPO_DIR/.venv/bin/aftergraph-work-intelligence" --help' in script
