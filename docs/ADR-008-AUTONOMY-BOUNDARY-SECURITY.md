@@ -86,8 +86,10 @@ The per-endpoint key is namespaced by auth method (`autonomy:bearer`,
 
 - **Secret location:** `/etc/aftergraph/work-intelligence.env` on the VDS.
 - **Secret reload:** `systemctl daemon-reload && systemctl restart work-intelligence`.
-- **Leak response:** rotate immediately with `secrets.token_hex(32)`, then rewrite
-  public git history with BFG Repo-Cleaner to remove the leaked value.
+- **Leak response:** rotate immediately with `secrets.token_hex(32)`. A
+  2026-09-07 full-history audit found no real secret value in public git
+  history (only placeholders and env-var name references), so no BFG rewrite
+  was required; re-audit before any future rewrite claim.
 - **Production config:** port `8090` bound on `172.17.0.1` (Docker bridge),
   systemd unit `work-intelligence`.
 - **Deploy:** `scripts/deploy-production-vds.sh`.

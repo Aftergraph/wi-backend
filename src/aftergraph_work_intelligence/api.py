@@ -279,6 +279,13 @@ class PromoteRequest(BaseModel):
     reason: str = Field(default="", max_length=2048)
 
 
+class MergeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    actor: str = Field(min_length=1, max_length=512)
+    reason: str = Field(default="", max_length=2048)
+    target_work_item_id: str = Field(min_length=1, max_length=512)
+
+
 class BulkStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_item_ids: list[str] = Field(min_length=1, max_length=100)
@@ -903,6 +910,48 @@ Production-grade observation → WorkItem inference engine.
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         result = jsonable_encoder(asdict(item))
         _fire_webhooks(request.app.state, "work_item.promoted", result)
+        return result
+
+    @router.post("/work-items/{work_item_id}/merge", dependencies=[Depends(auth)])
+    def merge_work_item(
+        work_item_id: str,
+        payload: MergeRequest,
+        request: Request,
+        tenant_id: str = Query(min_length=1, max_length=128),
+        svc: WorkIntelligenceService = Depends(service),
+    ):
+        """Merge a duplicate candidate into a canonical work item.
+
+        ponytail: no new state or schema — the duplicate is audited-cancelled
+        with reason `merged into <target>`, reusing TransitionEngine.cancel.
+        Both items must exist under the same tenant (fail-closed 404
+        otherwise); replaying the same merge is idempotent 200.
+        """
+        if work_item_id == payload.target_work_item_id:
+            raise HTTPException(status_code=400, detail="cannot merge a work item into itself")
+        try:
+            source = svc.get_work_item_detail(work_item_id, tenant_id)
+            svc.get_work_item_detail(payload.target_work_item_id, tenant_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="work item not found") from exc
+        engine: TransitionEngine = request.app.state.transitions
+        reason = payload.reason or f"merged into {payload.target_work_item_id}"
+        if source.work_item.status == "CANCELLED":
+            last = engine.last_transition(work_item_id)
+            if last is not None and last.to_state == "CANCELLED" and last.reason == reason:
+                result = jsonable_encoder(asdict(source.work_item))
+                result["merged_into_work_item_id"] = payload.target_work_item_id
+                return result
+            raise HTTPException(status_code=409, detail="work item already cancelled for another reason")
+        try:
+            item = engine.cancel(work_item_id, actor=payload.actor, reason=reason)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="work item not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        result = jsonable_encoder(asdict(item))
+        result["merged_into_work_item_id"] = payload.target_work_item_id
+        _fire_webhooks(request.app.state, "work_item.merged", result)
         return result
 
     @router.post("/work-items/{work_item_id}/publish", status_code=201, dependencies=[Depends(auth)])
