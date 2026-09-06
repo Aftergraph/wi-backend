@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import uvicorn
 from fastapi import (
@@ -37,6 +37,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .adapters import GitHubAdapter
 from .audit import AuditLog
+from .autonomy import AutonomyEvaluationInput, evaluate_autonomy
 from .body_log import BodyLoggingMiddleware
 from .cache import Cache
 from .evidence import build_evidence
@@ -282,6 +283,35 @@ class BulkStatusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     work_item_ids: list[str] = Field(min_length=1, max_length=100)
     tenant_id: str = Field(min_length=1, max_length=128)
+
+
+class AutonomyEvaluateRequest(BaseModel):
+    """Bounded autonomy-evaluation request (fail-closed, read-only)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation: Literal[
+        "auto_merge_patch",
+        "auto_retry_ci",
+        "auto_rollback",
+        "auto_promote",
+        "auto_label",
+        "auto_comment",
+    ]
+    actor: str = Field(min_length=1, max_length=512)
+    head_sha: str | None = Field(default=None, max_length=64)
+    base_sha: str | None = Field(default=None, max_length=64)
+    title: str = Field(default="", max_length=512)
+    body: str = Field(default="", max_length=50_000)
+    changed_files: list[str] = Field(default_factory=list, max_length=2000)
+    exit_code: int | None = None
+    test_suite: dict[str, Any] = Field(default_factory=dict)
+    exported_signatures: list[str] = Field(default_factory=list, max_length=5000)
+    telemetry: dict[str, Any] = Field(default_factory=dict)
+    author_permission_tier: str = Field(
+        default="contributor", min_length=1, max_length=64
+    )
+    line_churn: int = Field(default=0, ge=0)
 
 
 def create_app(
@@ -1285,6 +1315,49 @@ Production-grade observation → WorkItem inference engine.
                     "priority": item.priority,
                 })
         return {"items": items, "count": len(items)}
+
+    @router.post(
+        "/autonomy/decisions/evaluate",
+        status_code=200,
+        dependencies=[Depends(auth)],
+    )
+    def autonomy_evaluate(request: Request, payload: AutonomyEvaluateRequest) -> dict[str, Any]:
+        """Evaluate a bounded autonomous-execution proposal, fail-closed.
+
+        This endpoint NEVER executes, approves, merges, retries, rolls back, or
+        mutates an external system. It returns a sealed decision envelope that
+        the caller may use to gate their own execution pipeline.
+        """
+        evaluation = evaluate_autonomy(
+            AutonomyEvaluationInput(
+                operation=payload.operation,
+                actor=payload.actor,
+                head_sha=payload.head_sha,
+                base_sha=payload.base_sha,
+                title=payload.title,
+                body=payload.body,
+                changed_files=payload.changed_files,
+                exit_code=payload.exit_code,
+                test_suite=payload.test_suite,
+                exported_signatures=payload.exported_signatures,
+                telemetry=payload.telemetry,
+                author_permission_tier=payload.author_permission_tier,
+                line_churn=payload.line_churn,
+            ),
+            now=datetime.now(UTC),
+        )
+        return {
+            "operation": evaluation.operation,
+            "verdict": evaluation.verdict,
+            "confidence": evaluation.confidence,
+            "blockers": evaluation.blockers,
+            "signals": evaluation.signals,
+            "can_auto_execute": evaluation.can_auto_execute,
+            "requires_human_signoff": evaluation.requires_human_signoff,
+            "evaluated_at": evaluation.evaluated_at.isoformat(),
+            "schema_version": "autonomy.decision.evaluate/1.0",
+            "note": "Fail-closed: this endpoint only evaluates; it never executes.",
+        }
 
 
     # --- Detailed Health Check ---
