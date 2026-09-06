@@ -42,6 +42,32 @@ aftergraph-work-intelligence --db ./data/work-intelligence.db
 # API docs available at http://127.0.0.1:8087/docs
 ```
 
+## Product visuals
+
+Real captures from a running service (headless Chrome, `python -m
+aftergraph_work_intelligence.api --port 8811`, exact HEAD `44def8d` — see
+`.github/assets/screenshots/README.md` for provenance):
+
+<p align="center">
+  <img src=".github/assets/screenshots/01-overview.webp" alt="Work Intelligence dashboard — real running service" width="100%">
+  <br><em>Dashboard</em>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/02-primary-workflow.webp" alt="Swagger UI — live API documentation" width="100%">
+  <br><em>API documentation (Swagger UI)</em>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/03-detail-view.webp" alt="OpenAPI spec view" width="100%">
+  <br><em>OpenAPI spec</em>
+</p>
+
+<p align="center">
+  <img src=".github/assets/screenshots/04-live-state.webp" alt="Work Intelligence dashboard (mobile viewport)" width="100%">
+  <br><em>Dashboard — mobile viewport</em>
+</p>
+
 ## Architecture
 
 ```
