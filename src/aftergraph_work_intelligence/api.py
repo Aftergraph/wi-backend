@@ -1192,9 +1192,8 @@ Production-grade observation → WorkItem inference engine.
         with store._lock:
             rows = store._db.execute(sql, params).fetchall()
 
-        observations = []
-        for row in rows:
-            observations.append({
+        observations = [
+            {
                 "id": row["id"],
                 "tenant_id": row["tenant_id"],
                 "source": row["source"],
@@ -1203,7 +1202,9 @@ Production-grade observation → WorkItem inference engine.
                 "text": row["text"],
                 "occurred_at": _dt(row["occurred_at"]).isoformat() if row["occurred_at"] else None,
                 "created_at": _dt(row["created_at"]).isoformat() if row["created_at"] else None,
-            })
+            }
+            for row in rows
+        ]
 
         return {"observations": observations, "count": len(observations)}
 
@@ -1542,7 +1543,7 @@ Production-grade observation → WorkItem inference engine.
         return {
             "schema": "aftergraph.autonomy-decision-history/1.0",
             "count": len(rows),
-            "decisions": [dict(zip(columns, row)) for row in rows],
+            "decisions": [dict(zip(columns, row, strict=True)) for row in rows],
         }
 
 

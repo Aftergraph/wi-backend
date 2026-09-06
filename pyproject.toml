@@ -16,6 +16,14 @@ dev = ["pytest>=9,<10", "httpx>=0.28,<0.29"]
 [project.scripts]
 aftergraph-work-intelligence = "aftergraph_work_intelligence.secure_api:main"
 
+[tool.ruff]
+line-length = 140
+select = ["E", "F", "B", "UP", "SIM", "PERF", "C4", "I"]
+ignore = [
+  "B008",  # FastAPI canonical pattern: Depends()/Body()/Query() in argument defaults
+  "UP042", # str+Enum subclass is the canonical FastAPI enum-boundary pattern here
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
