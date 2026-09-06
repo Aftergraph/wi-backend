@@ -23,6 +23,25 @@ Capability = Literal[
 _SHA_RE = r"^[0-9a-fA-F]{7,64}$"
 _REPOSITORY_RE = r"^[^/\s]+/[^/\s]+$"
 
+# ponytail: hardcoded blast-radius map — ceiling: no AST parsing, no import graph.
+# Upgrade path: tree-sitter + route extractor for dynamic surface detection.
+_BLAST_RADIUS_MAP: dict[str, list[str]] = {
+    "src/auth": ["authentication", "session", "token_signing"],
+    "src/middleware": ["request_pipeline", "rate_limiting", "cors"],
+    "src/routes": ["api_surface", "request_handlers"],
+    "src/publishers": ["publication_pipeline", "external_delivery"],
+    "src/store": ["data_layer", "persistence"],
+    "src/policy": ["policy_engine", "tenant_governance"],
+    "src/transitions": ["state_machine", "lifecycle"],
+    "src/tasks": ["background_processing", "worker_pool"],
+    "src/tracing": ["observability", "telemetry"],
+    "Caddyfile": ["reverse_proxy", "tls", "ingress"],
+    "docker": ["container_runtime", "deployment"],
+    "pyproject.toml": ["dependencies", "build_system"],
+    ".github": ["ci_pipeline", "automation"],
+    "contracts": ["api_contracts", "schema_governance"],
+}
+
 
 @dataclass(frozen=True, slots=True)
 class AutonomyEvaluationInput:
@@ -51,6 +70,31 @@ class AutonomyEvaluationInput:
     author_permission_tier: int = 0
     critical_path_penalty: int = 0
     line_churn_penalty: int = 0
+    changed_files: Sequence[str] = ()
+
+
+def _compute_blast_radius(value: AutonomyEvaluationInput) -> dict[str, Any]:
+    """Map changed files to affected surfaces via the route prefix map."""
+    surfaces: set[str] = set()
+    counts: dict[str, int] = {}
+    for file_path in value.changed_files:
+        matched = False
+        for prefix, surface_tags in _BLAST_RADIUS_MAP.items():
+            if file_path.startswith(prefix) or file_path == prefix:
+                for tag in surface_tags:
+                    surfaces.add(tag)
+                counts[prefix] = counts.get(prefix, 0) + 1
+                matched = True
+                break
+        if not matched:
+            surfaces.add("unmapped")
+            counts["unmapped"] = counts.get("unmapped", 0) + 1
+    return {
+        "changed_files": len(value.changed_files),
+        "affected_surfaces": sorted(surfaces),
+        "affected_surface_count": len(surfaces),
+        "by_prefix": counts,
+    }
 
 
 def _validate_input(value: AutonomyEvaluationInput) -> None:
@@ -198,6 +242,7 @@ def evaluate_autonomy(value: AutonomyEvaluationInput) -> dict[str, Any]:
         ),
     )
     observed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    blast_radius = _compute_blast_radius(value)
     return {
         "schema": "aftergraph.autonomy-decision/1.0",
         "request_id": value.request_id,
@@ -238,6 +283,7 @@ def evaluate_autonomy(value: AutonomyEvaluationInput) -> dict[str, Any]:
             "execution_authority": "evaluation-only",
             "execution_state": "not_executed",
         },
+        "blast_radius": blast_radius,
     }
 
 

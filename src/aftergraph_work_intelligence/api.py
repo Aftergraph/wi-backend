@@ -290,28 +290,43 @@ class AutonomyEvaluateRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    operation: Literal[
-        "auto_merge_patch",
-        "auto_retry_ci",
-        "auto_rollback",
-        "auto_promote",
-        "auto_label",
-        "auto_comment",
-    ]
-    actor: str = Field(min_length=1, max_length=512)
-    head_sha: str | None = Field(default=None, max_length=64)
-    base_sha: str | None = Field(default=None, max_length=64)
-    title: str = Field(default="", max_length=512)
-    body: str = Field(default="", max_length=50_000)
-    changed_files: list[str] = Field(default_factory=list, max_length=2000)
-    exit_code: int | None = None
-    test_suite: dict[str, Any] = Field(default_factory=dict)
-    exported_signatures: list[str] = Field(default_factory=list, max_length=5000)
-    telemetry: dict[str, Any] = Field(default_factory=dict)
-    author_permission_tier: str = Field(
-        default="contributor", min_length=1, max_length=64
+    request_id: str = Field(
+        min_length=8, max_length=128, pattern=r"^adr_[a-zA-Z0-9_-]{8,128}$"
     )
-    line_churn: int = Field(default=0, ge=0)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    repository: str = Field(min_length=3, max_length=256, pattern=r"^[^/\s]+/[^/\s]+$")
+    ref: str = Field(min_length=1, max_length=256)
+    head_sha: str = Field(
+        min_length=7, max_length=64, pattern=r"^[0-9a-fA-F]{7,64}$"
+    )
+    event_key: str = Field(min_length=1, max_length=512)
+    capability: Literal[
+        "dependency.patch.merge",
+        "ci.check.retry",
+        "deployment.rollback.prepare",
+        "github.status.sync",
+        "github.suggestion.comment",
+        "none",
+    ]
+    objective: str = Field(min_length=1, max_length=500)
+    impact_summary: str = Field(min_length=1, max_length=1000)
+    evidence: list[dict[str, Any]] = Field(min_length=1)
+    tests_passed: bool = False
+    patch_release: bool = False
+    exported_signatures_changed: bool = False
+    critical_file_touched: bool = False
+    auth_or_secret_touched: bool = False
+    proxy_or_ssl_touched: bool = False
+    transient_ci_error: bool = False
+    canary_error_rate: float | None = None
+    superseded_head: bool = False
+    stale_review: bool = False
+    retry_count: int = Field(default=0, ge=0)
+    test_coverage_delta: int = Field(default=0, ge=0, le=30)
+    author_permission_tier: int = Field(default=0, ge=0, le=20)
+    critical_path_penalty: int = Field(default=0, ge=0, le=40)
+    line_churn_penalty: int = Field(default=0, ge=0, le=10)
+    changed_files: list[str] = Field(default_factory=list, max_length=2000)
 
 
 def create_app(
@@ -1330,33 +1345,47 @@ Production-grade observation → WorkItem inference engine.
         """
         evaluation = evaluate_autonomy(
             AutonomyEvaluationInput(
-                operation=payload.operation,
-                actor=payload.actor,
+                request_id=payload.request_id,
+                tenant_id=payload.tenant_id,
+                repository=payload.repository,
+                ref=payload.ref,
                 head_sha=payload.head_sha,
-                base_sha=payload.base_sha,
-                title=payload.title,
-                body=payload.body,
-                changed_files=payload.changed_files,
-                exit_code=payload.exit_code,
-                test_suite=payload.test_suite,
-                exported_signatures=payload.exported_signatures,
-                telemetry=payload.telemetry,
+                event_key=payload.event_key,
+                capability=payload.capability,
+                objective=payload.objective,
+                impact_summary=payload.impact_summary,
+                evidence=payload.evidence,
+                tests_passed=payload.tests_passed,
+                patch_release=payload.patch_release,
+                exported_signatures_changed=payload.exported_signatures_changed,
+                critical_file_touched=payload.critical_file_touched,
+                auth_or_secret_touched=payload.auth_or_secret_touched,
+                proxy_or_ssl_touched=payload.proxy_or_ssl_touched,
+                transient_ci_error=payload.transient_ci_error,
+                canary_error_rate=payload.canary_error_rate,
+                superseded_head=payload.superseded_head,
+                stale_review=payload.stale_review,
+                retry_count=payload.retry_count,
+                test_coverage_delta=payload.test_coverage_delta,
                 author_permission_tier=payload.author_permission_tier,
-                line_churn=payload.line_churn,
+                critical_path_penalty=payload.critical_path_penalty,
+                line_churn_penalty=payload.line_churn_penalty,
+                changed_files=payload.changed_files,
             ),
-            now=datetime.now(UTC),
         )
         return {
-            "operation": evaluation.operation,
-            "verdict": evaluation.verdict,
-            "confidence": evaluation.confidence,
-            "blockers": evaluation.blockers,
-            "signals": evaluation.signals,
-            "can_auto_execute": evaluation.can_auto_execute,
-            "requires_human_signoff": evaluation.requires_human_signoff,
-            "evaluated_at": evaluation.evaluated_at.isoformat(),
-            "schema_version": "autonomy.decision.evaluate/1.0",
-            "note": "Fail-closed: this endpoint only evaluates; it never executes.",
+            "schema": evaluation["schema"],
+            "request_id": evaluation["request_id"],
+            "subject": evaluation["subject"],
+            "capability": evaluation["capability"],
+            "intent": evaluation["intent"],
+            "risk": evaluation["risk"],
+            "confidence": evaluation["confidence"],
+            "decision": evaluation["decision"],
+            "human_action": evaluation["human_action"],
+            "evidence": evaluation["evidence"],
+            "authority": evaluation["authority"],
+            "blast_radius": evaluation.get("blast_radius", {}),
         }
 
 
