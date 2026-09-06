@@ -1,0 +1,25 @@
+# works.yml — Work Intelligence CI pipeline executed by WORKS.
+version: 1
+
+work:
+  verify:
+    triggers:
+      - push
+      - pull_request
+
+    requirements:
+      confidence: development
+      os: linux
+      arch: amd64
+      pool: avc-core
+
+    nodes:
+      test:
+        run: |
+          uv venv .venv-works
+          uv pip install --python .venv-works/bin/python -q -e '.[dev]' ruff
+          .venv-works/bin/ruff check src/ tests/
+          .venv-works/bin/python -m pytest --tb=short -q
+        cache: true
+        cache_key_inputs: [run, repository]
+        timeout_s: 600
