@@ -6,6 +6,6 @@ permissions:
   pull-requests: write
 jobs:
   auto-merge:
-    uses: Aftergraph/.github/.github/workflows/auto-merge-dependabot.yml@main
+    uses: Aftergraph/.github/.github/workflows/auto-merge-dependabot.yml@da37fba1ccf9 # main
     secrets:
       automerge_pat: ${{ secrets.AUTOMERGE_PAT }}

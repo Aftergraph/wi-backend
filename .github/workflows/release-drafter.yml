@@ -4,12 +4,14 @@ on:
     branches: [main]
   workflow_dispatch:
 permissions:
-  contents: write
+  contents: read
   pull-requests: read
 jobs:
   draft:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: release-drafter/release-drafter@v6
+      - uses: release-drafter/release-drafter@6a93d829887a # v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
