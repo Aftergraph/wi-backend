@@ -6,28 +6,26 @@
 - `wi-quick-tunnel`: temporary `cloudflared --url http://127.0.0.1:8090` (webhooks use this until permanent hostname exists).
 - Backend `:8090` + frontend `:3001` healthy on VDS.
 - Tunnel ingress is now configured remotely (Cloudflare config version 5):
-  - `intel.rendetalje.dk` → `http://172.17.0.1:8090` (backend/webhooks)
-  - `work-intelligence.rendetalje.dk` → `http://172.17.0.1:3001` (frontend UI)
-- DNS CNAME records are still missing: current Wrangler OAuth has zone-read but not DNS-write permission, so both names remain unresolved.
+  - `intel.rendetalje.dk` → `http://172.21.0.1:8090` (backend/webhooks)
+  - `work-intelligence.rendetalje.dk` → `http://172.21.0.1:3001` (frontend UI)
+- DNS CNAME records are present and proxied:
+  - `intel.rendetalje.dk` → `8b80b1e3-886c-459a-bae9-c668d18aec1a.cfargotunnel.com`
+  - `work-intelligence.rendetalje.dk` → `8b80b1e3-886c-459a-bae9-c668d18aec1a.cfargotunnel.com`
+- Live verification: backend `/healthz` and frontend `/` + `/api/healthz` return HTTP 200.
 
-## Jonas action (~2 min, Cloudflare DNS)
+## Current operational state
 
-Create proxied CNAME records in zone `rendetalje.dk`:
+The permanent webhook hooks are configured on both repositories:
 
-| Name | Target | Proxy |
-|---|---|---|
-| `intel` | `8b80b1e3-886c-459a-bae9-c668d18aec1a.cfargotunnel.com` | Proxied |
-| `work-intelligence` | `8b80b1e3-886c-459a-bae9-c668d18aec1a.cfargotunnel.com` | Proxied |
+- `Aftergraph/work-intelligence-v2` hook `675062310`
+- `Aftergraph/work-intelligence-web` hook `675062318`
+- URL: `https://intel.rendetalje.dk/v1/webhook/github`
+- Content type: JSON
+- GitHub ping read-back: HTTP 202 / OK
 
-Then verify:
-
-- `curl https://intel.rendetalje.dk/healthz` → backend JSON
-- Open `https://work-intelligence.rendetalje.dk/` → Aftergraph Work Intelligence UI
-
-## After ingress is live
-
-1. Re-point webhook registrations from quick-tunnel URL to `https://intel.rendetalje.dk`.
-2. Stop `wi-quick-tunnel` container.
+The temporary `trycloudflare.com` URL is no longer used by those hooks. Keep the
+`wi-quick-tunnel` container running until a later cleanup window confirms there
+are no remaining consumers.
 
 ## Secret learning (2026-09-06)
 
