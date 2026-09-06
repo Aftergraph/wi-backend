@@ -8,7 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.api import create_app
-from aftergraph_work_intelligence.migrations import MigrationManager, run_migrations
+from aftergraph_work_intelligence.migrations import (
+    MIGRATIONS,
+    MigrationManager,
+    run_migrations,
+)
 
 
 @pytest.fixture()
@@ -86,8 +90,8 @@ class TestRunMigrations:
     def test_run_migrations(self, tmp_path):
         db = tmp_path / "test.db"
         result = run_migrations(db)
-        assert result["current_version"] == 3
-        assert result["total_applied"] == 3
+        assert result["current_version"] == MIGRATIONS[-1][0]
+        assert result["total_applied"] == len(MIGRATIONS)
 
     def test_run_migrations_idempotent(self, tmp_path):
         db = tmp_path / "test.db"
