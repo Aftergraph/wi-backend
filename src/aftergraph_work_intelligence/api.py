@@ -991,14 +991,16 @@ Production-grade observation → WorkItem inference engine.
             return {"work_item": encoded, "evidence": evidence(encoded, replay)}
 
         # Cross-restart idempotency: a recorded key decides before any mutation.
+        # A key used for a DIFFERENT merge is a conflict; otherwise the
+        # (source, reason) match below decides replay. A retry carrying a new
+        # key (e.g. UI timeout retry) is still the same operation → 200.
         if key:
             for prior in store.find_transition_by_idempotency_key(key):
-                if prior.work_item_id == work_item_id and prior.reason == reason:
-                    return respond(source.work_item, replay=True)
-                raise HTTPException(status_code=409, detail="idempotency key already used for a different merge")
+                if prior.work_item_id != work_item_id or prior.reason != reason:
+                    raise HTTPException(status_code=409, detail="idempotency key already used for a different merge")
         if previous_state == "CANCELLED":
             last = engine.last_transition(work_item_id)
-            if last is not None and last.to_state == "CANCELLED" and last.reason == reason and last.idempotency_key == key:
+            if last is not None and last.to_state == "CANCELLED" and last.reason == reason:
                 return respond(source.work_item, replay=True)
             raise HTTPException(status_code=409, detail="work item already cancelled for another reason")
         try:

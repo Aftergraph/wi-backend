@@ -159,3 +159,26 @@ def test_migration_v5_adds_idempotency_column(tmp_path):
     result = run_migrations(db_path=tmp_path / "mig5.db")
     assert result["current_version"] >= 5
     assert any(m["version"] == 5 for m in result["migrations"])
+
+
+def test_merge_retry_with_new_key_is_idempotent(tmp_path):
+    """UI timeout retries generate a fresh key per attempt — same target must replay 200."""
+    from fastapi.testclient import TestClient
+
+    from aftergraph_work_intelligence.api import create_app
+
+    with TestClient(create_app(db_path=tmp_path / "merge-retry.db")) as client:
+        canonical = _ingest(client, "renos", "Vi skal skifte filteret i emhætten", "mr-1")
+        duplicate = _ingest(client, "renos", "Vi skal tørre vinduerne i gangen", "mr-2")
+
+        def merge(key):
+            return client.post(
+                f"/v1/work-items/{duplicate}/merge",
+                params={"tenant_id": "renos"},
+                json={"actor": "e2e", "target_work_item_id": canonical, "idempotency_key": key},
+            )
+
+        assert merge("retry-key-attempt-1").status_code == 200
+        retry = merge("retry-key-attempt-2")
+        assert retry.status_code == 200
+        assert retry.json()["evidence"]["idempotent_replay"] is True
