@@ -24,7 +24,11 @@ def client(app_data):
 @pytest.fixture()
 def created_key(client):
     """Create an API key and return it."""
-    resp = client.post("/v1/api-keys", json={"name": "auth-test"}, headers={"Authorization": "Bearer master-token"})
+    resp = client.post(
+        "/v1/api-keys",
+        json={"name": "auth-test"},
+        headers={"Authorization": "Bearer master-token"},
+    )
     return resp.json()["key"]
 
 
@@ -43,7 +47,10 @@ class TestAPIKeyAuth:
         assert resp.status_code == 200
 
     def test_invalid_api_key_rejected(self, client):
-        resp = client.get("/v1/work-items?tenant_id=default", headers={"X-API-Key": "ak_invalidkey123"})
+        resp = client.get(
+            "/v1/work-items?tenant_id=default",
+            headers={"X-API-Key": "ak_invalidkey123"},
+        )
         assert resp.status_code == 401
 
     def test_same_prefix_forged_api_key_rejected(self, client, created_key):
@@ -53,7 +60,7 @@ class TestAPIKeyAuth:
         resp = client.get("/v1/work-items?tenant_id=default", headers={"X-API-Key": forged})
         assert resp.status_code == 401
 
-        def test_revoked_api_key_rejected(self, client):
+    def test_revoked_api_key_rejected(self, client):
         # Create a key we can track
         resp = client.post("/v1/api-keys", json={"name": "to-revoke"}, headers=AUTH_BEARER)
         key_info = resp.json()
@@ -61,14 +68,20 @@ class TestAPIKeyAuth:
         key_id = key_info["id"]
 
         # Verify it works first
-        resp = client.get("/v1/work-items?tenant_id=default", headers={"X-API-Key": key_to_revoke})
+        resp = client.get(
+            "/v1/work-items?tenant_id=default",
+            headers={"X-API-Key": key_to_revoke},
+        )
         assert resp.status_code == 200
 
         # Revoke it
         client.delete(f"/v1/api-keys/{key_id}", headers=AUTH_BEARER)
 
         # Now it should fail
-        resp = client.get("/v1/work-items?tenant_id=default", headers={"X-API-Key": key_to_revoke})
+        resp = client.get(
+            "/v1/work-items?tenant_id=default",
+            headers={"X-API-Key": key_to_revoke},
+        )
         assert resp.status_code == 401
 
     def test_no_auth_rejected(self, client):
@@ -76,11 +89,15 @@ class TestAPIKeyAuth:
         assert resp.status_code == 401
 
     def test_api_key_can_write(self, client, created_key):
-        resp = client.post("/v1/observations", json={
-            "tenant_id": "default",
-            "source": "test",
-            "text": "API key auth test",
-        }, headers={"X-API-Key": created_key})
+        resp = client.post(
+            "/v1/observations",
+            json={
+                "tenant_id": "default",
+                "source": "test",
+                "text": "API key auth test",
+            },
+            headers={"X-API-Key": created_key},
+        )
         assert resp.status_code in (200, 201, 202)
 
     def test_rotated_key_old_rejected(self, client):
