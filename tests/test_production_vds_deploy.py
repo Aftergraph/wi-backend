@@ -21,6 +21,7 @@ def test_deploy_help_is_non_mutating_and_documents_exact_sha_gate() -> None:
     assert "--sha <40-char-main-sha>" in result.stdout
     assert "--preflight-only" in result.stdout
     assert "--install-unit" in result.stdout
+    assert "/tmp/work-intelligence-deploy.sh" in result.stdout
 
 
 def test_deploy_script_fails_closed_on_source_env_auth_cors_and_headers() -> None:
@@ -28,14 +29,18 @@ def test_deploy_script_fails_closed_on_source_env_auth_cors_and_headers() -> Non
 
     assert '[[ "$REMOTE_SHA" == "$TARGET_SHA" ]]' in text
     assert "git_repo status --porcelain" in text
+    assert 'git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}"' in text
     assert "AFTERGRAPH_API_TOKEN" in text
     assert "AFTERGRAPH_EVIDENCE_SECRET" in text
     assert "AFTERGRAPH_GITHUB_WEBHOOK_SECRET" in text
     assert "AFTERGRAPH_CORS_ORIGINS" in text
+    assert 'values["AFTERGRAPH_DB"] != "/var/lib/work-intelligence/data.db"' in text
     assert 'values["AFTERGRAPH_HOST"] != "127.0.0.1"' in text
     assert 'values["AFTERGRAPH_PORT"] != "8090"' in text
     assert "sqlite3.connect" in text
     assert "src.backup(dst)" in text
+    assert "useradd --system --user-group" in text
+    assert 'systemctl show "$SERVICE" -p ExecStart --value' in text
     assert "/v1/work-items?tenant_id=smoke-prod" in text
     assert "Origin: https://evil.example" in text
     assert "strict-transport-security" in text
