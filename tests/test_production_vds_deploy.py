@@ -31,15 +31,19 @@ def test_deploy_script_fails_closed_on_source_env_auth_cors_and_headers() -> Non
     assert "git_repo status --porcelain" in text
     assert 'git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}"' in text
     assert "AFTERGRAPH_API_TOKEN" in text
-    assert "AFTERGRAPH_EVIDENCE_SECRET" in text
+    assert '"AFTERGRAPH_EVIDENCE_SECRET",' not in text
     assert "AFTERGRAPH_GITHUB_WEBHOOK_SECRET" in text
     assert "AFTERGRAPH_CORS_ORIGINS" in text
-    assert 'values["AFTERGRAPH_DB"] != "/var/lib/work-intelligence/data.db"' in text
-    assert 'values["AFTERGRAPH_HOST"] != "127.0.0.1"' in text
-    assert 'values["AFTERGRAPH_PORT"] != "8090"' in text
+    assert 'values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db") != "/var/lib/work-intelligence/wi.db"' in text
+    assert 'values.get("AFTERGRAPH_HOST", "172.17.0.1") != "172.17.0.1"' in text
+    assert 'if port != "8090":' in text
     assert "sqlite3.connect" in text
     assert "src.backup(dst)" in text
-    assert "useradd --system --user-group" in text
+    assert "useradd --system --user-group" not in text
+    assert 'uv pip install --python "$REPO_DIR/.venv/bin/python" -e "$REPO_DIR"' in text
+    assert 'VDS_BACKEND_OVERRIDE="deploy/systemd/work-intelligence-vds.conf"' in text
+    assert 'VDS_FRONTEND_OVERRIDE="deploy/systemd/work-intelligence-web-vds.conf"' in text
+    assert 'systemctl restart "$FRONTEND_SERVICE"' in text
     assert 'systemctl show "$SERVICE" -p ExecStart --value' in text
     assert "/v1/work-items?tenant_id=smoke-prod" in text
     assert "Origin: https://evil.example" in text
@@ -63,3 +67,15 @@ def test_canonical_systemd_unit_uses_secure_entrypoint_and_hardening() -> None:
     assert "ProtectSystem=strict" in text
     assert "ProtectHome=true" in text
     assert "ReadWritePaths=/var/lib/work-intelligence /opt/work-intelligence/logs" in text
+
+
+def test_vds_deploy_defaults_match_measured_production_contract() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+    runbook = Path("docs/PRODUCTION_VDS_DEPLOYMENT.md").read_text(encoding="utf-8")
+
+    assert 'ENV_FILE="/etc/work-intelligence-webhook.secret"' in text
+    assert 'LOCAL_API="http://172.17.0.1:8090"' in text
+    assert "/var/lib/work-intelligence/wi.db" in runbook
+    assert "172.17.0.1:8090" in runbook
+    assert "renos-control-edge" in runbook
+    assert "172.21.0.0/16" in runbook

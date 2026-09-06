@@ -1,25 +1,51 @@
 # Production VDS Deployment Runbook
 
-This runbook is the production promotion path for the backend behind `https://intel.rendetalje.dk`.
+This is the exact-SHA promotion path for the Work Intelligence backend behind
+`https://intel.rendetalje.dk` on the measured production host `vmi3517816`.
+
+## Measured production contract
+
+Verified on 2026-09-06:
+
+- checkout: `/opt/work-intelligence`
+- backend service: `work-intelligence.service`
+- frontend service: `work-intelligence-web.service`
+- backend listener: `172.17.0.1:8090`
+- frontend listener: port `3001`
+- frontend API proxy: `http://172.17.0.1:8090`
+- named Cloudflare Tunnel network: `renos-control-edge` (`172.21.0.0/16`)
+- named tunnel API origin: `http://172.17.0.1:8090`
+- SQLite database: `/var/lib/work-intelligence/wi.db`
+- current secret source: `/etc/work-intelligence-webhook.secret`
+- UFW permits `8090/tcp` from `172.21.0.0/16`
+
+The backend must not be changed to `127.0.0.1:8090` while the named tunnel
+origin remains `172.17.0.1:8090`. That mismatch was reproduced in production as
+an external `502`. Binding to every interface is also unnecessary: the current
+contract binds only the Docker bridge address used by the named tunnel.
+
+The old random `trycloudflare.com` quick tunnel is not part of production and
+was removed after the named tunnel was independently verified.
 
 ## Safety model
 
-The deployment is intentionally exact-SHA and fail-closed. It refuses to run when:
+The deployment is exact-SHA and fail-closed. It refuses to promote when:
 
 - the requested SHA is not the current `origin/main` head;
-- the deployment checkout is dirty;
-- required production environment keys are missing;
-- CORS is not restricted to `https://work-intelligence.rendetalje.dk`;
-- the database is not `/var/lib/work-intelligence/data.db`;
-- the backend is not bound to `127.0.0.1:8090` behind the tunnel;
-- the effective public systemd process bypasses the secure console entrypoint;
+- the deployment worktree is dirty;
+- the measured production secret file is unreadable or core auth/integration
+  keys are missing;
+- DB, listener, port, or CORS settings conflict with the measured VDS contract;
+- the VDS backend/frontend override files are absent from the target SHA;
+- the effective backend process bypasses the secure console entrypoint;
 - local or public post-deploy security probes fail.
 
-Secret values are never printed by the deployment script.
+`AFTERGRAPH_EVIDENCE_SECRET` is intentionally not made a deploy prerequisite in
+this migration. The currently running service historically used the application's
+legacy evidence-secret default. Rotating that material requires a versioned
+key-rotation design so old evidence does not become unverifiable.
 
-## 1. Bootstrap the deploy script from the verified exact head
-
-Do not run a deployment helper from the stale production checkout. Fetch `main`, verify the exact green SHA you intend to promote, then materialize that script into `/tmp` without changing the worktree:
+## 1. Bootstrap from the verified exact head
 
 ```bash
 REPO=/opt/work-intelligence
@@ -27,86 +53,72 @@ TARGET=<VERIFIED_MAIN_SHA>
 
 git -c "safe.directory=$REPO" -C "$REPO" fetch --prune origin main
 test "$(git -c "safe.directory=$REPO" -C "$REPO" rev-parse origin/main)" = "$TARGET"
-git -c "safe.directory=$REPO" -C "$REPO" show \
-  "$TARGET:scripts/deploy-production-vds.sh" \
-  > /tmp/work-intelligence-deploy.sh
+git -c "safe.directory=$REPO" -C "$REPO" show   "$TARGET:scripts/deploy-production-vds.sh"   > /tmp/work-intelligence-deploy.sh
 bash -n /tmp/work-intelligence-deploy.sh
 ```
 
-`TARGET` must be the exact `main` commit whose final CI you already verified. Copy-pasting an older green SHA is intentionally rejected.
-
 ## 2. Read-only preflight
 
-Run the bootstrapped helper first with no production mutation:
-
 ```bash
-bash /tmp/work-intelligence-deploy.sh \
-  --sha "$TARGET" \
-  --install-unit \
-  --preflight-only
+bash /tmp/work-intelligence-deploy.sh   --sha "$TARGET"   --install-unit   --preflight-only
 ```
 
-`--install-unit` in preflight mode means "validate that the canonical unit can be installed". It does not modify systemd or create the service user during preflight.
+`--install-unit` is retained for CLI compatibility. On this VDS it means
+"install the checked-in VDS systemd overrides", not "replace the legacy base
+unit with a different service-account/runtime layout".
 
-Expected terminal marker:
+Expected marker:
 
 ```text
 DEPLOYMENT_PREFLIGHT=PASS
 ```
 
-## 3. Deploy the verified exact head
+## 3. Deploy
 
 ```bash
-bash /tmp/work-intelligence-deploy.sh \
-  --sha "$TARGET" \
-  --install-unit
+bash /tmp/work-intelligence-deploy.sh   --sha "$TARGET"   --install-unit
 ```
 
-The script performs, in order:
+The helper performs:
 
-1. host/repo/environment preflight;
-2. exact `origin/main` SHA verification;
-3. exact-target verification that the canonical systemd unit exists;
-4. online SQLite backup with Python's SQLite backup API;
-5. fast-forward checkout to the verified target;
-6. production package installation into the existing venv;
-7. creation of the unprivileged `work-intelligence` system account if needed;
-8. backup and installation of the canonical hardened systemd unit;
-9. verification of the **effective** systemd `ExecStart`, including drop-ins;
-10. daemon reload, enable, and restart;
-11. local health/auth/CORS/security-header verification;
-12. public health/auth/CORS/security-header verification.
+1. exact-head and clean-worktree checks;
+2. production secret/config validation without printing secret values;
+3. online SQLite backup with Python's backup API;
+4. fast-forward checkout to the verified SHA;
+5. editable package refresh with `uv pip` against the existing production venv;
+6. backup and installation of the checked-in backend and frontend VDS drop-ins;
+7. backend and frontend restart;
+8. secure-entrypoint verification;
+9. local API health/auth/CORS/security-header checks;
+10. local frontend authenticated `/api/*` proxy check;
+11. public API health/auth/CORS/security-header checks;
+12. public frontend and `/api/*` proxy checks.
 
-Successful completion ends with:
-
-```text
-DEPLOYMENT=PASS
-```
-
-It also prints the previous SHA and backup paths so rollback evidence is preserved.
+Successful completion ends with `DEPLOYMENT=PASS` and prints the previous SHA
+and backup paths.
 
 ## 4. Independent external gate
 
-After the VDS script passes, rerun the repository workflow `Production Security Verify Once`. The production promotion is not closed until the external runner independently observes:
+After any production restart or topology change, rerun `Production Security
+Verify Once`. Production is not verified until an external runner observes:
 
-- `/healthz` = `200`;
-- unauthenticated protected API = `401` or `403`;
-- hostile-origin CORS preflight = `403`;
-- hostile origin is not echoed as an allowed origin;
-- HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and `Permissions-Policy` are present.
+- health `200`;
+- unauthenticated protected API `401` or `403`;
+- hostile-origin preflight `403`;
+- HSTS, CSP, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and
+  `Permissions-Policy` on the API response.
 
 ## 5. Failure handling
 
-If restart or post-deploy verification fails, do not improvise destructive recovery. Record:
+Capture evidence before changing anything else:
 
 ```bash
 git -C /opt/work-intelligence rev-parse HEAD
-systemctl status --no-pager work-intelligence
+systemctl status --no-pager work-intelligence work-intelligence-web
 journalctl -u work-intelligence -n 100 --no-pager
 ```
 
-The deploy script records the previous SHA, database backup, and any replaced unit-file backup. Use those exact artifacts for a deliberate rollback after diagnosing the failure.
-
-## Promotion authority
-
-The deployment target is deliberately **not hard-coded in this document**. Every promotion uses the current exact `origin/main` SHA only after its final CI evidence is green. A green branch from yesterday is not evidence for today's production binary, despite computers' continuing campaign to make this seem optional.
+Use the exact database and drop-in backups emitted by the deployment helper for
+a deliberate rollback. Do not improvise around a failed security probe. A green
+CI badge is charming, but it is not a substitute for the process actually
+serving the public hostname.
