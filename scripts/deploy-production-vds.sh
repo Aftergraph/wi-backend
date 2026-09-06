@@ -15,7 +15,7 @@ SKIP_PUBLIC=0
 usage() {
   cat <<'EOF'
 Usage:
-  bash scripts/deploy-production-vds.sh --sha <40-char-main-sha> [options]
+  bash /tmp/work-intelligence-deploy.sh --sha <40-char-main-sha> [options]
 
 Options:
   --sha SHA            Exact verified commit to deploy. Required.
@@ -29,8 +29,9 @@ Options:
   --public-api URL     Public API base. Default: https://intel.rendetalje.dk
   -h, --help           Show this help.
 
-The deploy refuses stale/non-main SHAs, dirty worktrees, missing production
-secrets, an unexpected host/port/CORS configuration, or an insecure systemd
+Bootstrap the script from the verified target commit into /tmp before running
+it. The deploy refuses stale/non-main SHAs, dirty worktrees, missing production
+secrets, an unexpected DB/host/port/CORS configuration, or an insecure systemd
 entrypoint. Secret values are never printed.
 EOF
 }
@@ -116,7 +117,6 @@ git_repo() {
 }
 
 [[ -d "$REPO_DIR/.git" ]] || fail "deployment checkout missing: $REPO_DIR"
-[[ -f "$REPO_DIR/$UNIT_SOURCE" ]] || fail "canonical systemd unit missing from checkout"
 [[ -x "$REPO_DIR/.venv/bin/python" ]] || fail "production virtualenv missing: $REPO_DIR/.venv"
 root test -r "$ENV_FILE" || fail "production environment file is not readable: $ENV_FILE"
 
@@ -128,6 +128,7 @@ git_repo fetch --prune origin main
 REMOTE_SHA="$(git_repo rev-parse origin/main)"
 [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || fail "requested SHA is not the current origin/main exact head ($REMOTE_SHA)"
 git_repo cat-file -e "${TARGET_SHA}^{commit}" || fail "requested SHA is not available in the deployment checkout"
+git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}" || fail "canonical systemd unit is missing from requested target SHA"
 
 DB_PATH="$(root python3 - "$ENV_FILE" <<'PY'
 from __future__ import annotations
@@ -163,6 +164,8 @@ if missing:
 
 if values["AFTERGRAPH_CORS_ORIGINS"] != "https://work-intelligence.rendetalje.dk":
     raise SystemExit("AFTERGRAPH_CORS_ORIGINS is not the production frontend allowlist")
+if values["AFTERGRAPH_DB"] != "/var/lib/work-intelligence/data.db":
+    raise SystemExit("AFTERGRAPH_DB must be /var/lib/work-intelligence/data.db")
 if values["AFTERGRAPH_HOST"] != "127.0.0.1":
     raise SystemExit("AFTERGRAPH_HOST must be 127.0.0.1 behind the tunnel")
 if values["AFTERGRAPH_PORT"] != "8090":
@@ -174,8 +177,14 @@ PY
 
 [[ -n "$DB_PATH" ]] || fail "AFTERGRAPH_DB resolved to an empty path"
 
+SYSTEM_USER_STATE="not-applicable"
 if ((INSTALL_UNIT)); then
-  id work-intelligence >/dev/null 2>&1 || fail "system user work-intelligence does not exist"
+  if id work-intelligence >/dev/null 2>&1; then
+    getent group work-intelligence >/dev/null 2>&1 || fail "work-intelligence user exists but matching group is missing"
+    SYSTEM_USER_STATE="present"
+  else
+    SYSTEM_USER_STATE="will-create"
+  fi
 else
   UNIT_TEXT="$(root systemctl cat "$SERVICE" 2>/dev/null)" || fail "systemd service is missing: $SERVICE"
   grep -Fq "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$UNIT_TEXT" \
@@ -188,6 +197,7 @@ printf 'preflight_repo=%s\n' "$REPO_DIR"
 printf 'preflight_service=%s\n' "$SERVICE"
 printf 'preflight_db=%s\n' "$DB_PATH"
 printf 'preflight_install_unit=%s\n' "$INSTALL_UNIT"
+printf 'preflight_system_user=%s\n' "$SYSTEM_USER_STATE"
 
 if ((PREFLIGHT_ONLY)); then
   printf 'DEPLOYMENT_PREFLIGHT=PASS\n'
@@ -224,10 +234,17 @@ fi
 git_repo switch main
 git_repo merge --ff-only "$TARGET_SHA"
 [[ "$(git_repo rev-parse HEAD)" == "$TARGET_SHA" ]] || fail "checkout did not land on requested exact SHA"
+[[ -f "$REPO_DIR/$UNIT_SOURCE" ]] || fail "canonical systemd unit missing after exact-head checkout"
 
 root "$REPO_DIR/.venv/bin/python" -m pip install --upgrade "$REPO_DIR"
 
 if ((INSTALL_UNIT)); then
+  if ! id work-intelligence >/dev/null 2>&1; then
+    NOLOGIN="$(command -v nologin || true)"
+    [[ -n "$NOLOGIN" ]] || NOLOGIN="/usr/sbin/nologin"
+    root useradd --system --user-group --home-dir /nonexistent --shell "$NOLOGIN" work-intelligence
+  fi
+
   FRAGMENT_PATH="$(root systemctl show "$SERVICE" -p FragmentPath --value 2>/dev/null || true)"
   if [[ -n "$FRAGMENT_PATH" && -f "$FRAGMENT_PATH" ]]; then
     UNIT_BACKUP="$BACKUP_DIR/work-intelligence.service.${TIMESTAMP}"
@@ -236,10 +253,17 @@ if ((INSTALL_UNIT)); then
   fi
 
   root install -d -o work-intelligence -g work-intelligence /var/lib/work-intelligence "$REPO_DIR/logs"
+  if root test -e "$DB_PATH"; then
+    root chown work-intelligence:work-intelligence "$DB_PATH"
+  fi
   root install -m 0644 "$REPO_DIR/$UNIT_SOURCE" "/etc/systemd/system/${SERVICE}.service"
 fi
 
 root systemctl daemon-reload
+EFFECTIVE_EXEC="$(root systemctl show "$SERVICE" -p ExecStart --value 2>/dev/null)" || fail "unable to resolve effective systemd ExecStart"
+grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$EFFECTIVE_EXEC" \
+  || fail "effective systemd ExecStart does not use the secure production entrypoint"
+
 root systemctl enable "$SERVICE" >/dev/null
 root systemctl restart "$SERVICE"
 
