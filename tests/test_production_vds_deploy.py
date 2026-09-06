@@ -8,12 +8,12 @@ UNIT = Path("deploy/systemd/work-intelligence.service")
 
 
 def test_deploy_script_has_valid_bash_syntax() -> None:
-    subprocess.run(["bash", "-n", str(SCRIPT)], check=True)
+    subprocess.run(["bash", "-n", SCRIPT.as_posix()], check=True)
 
 
 def test_deploy_help_is_non_mutating_and_documents_exact_sha_gate() -> None:
     result = subprocess.run(
-        ["bash", str(SCRIPT), "--help"],
+        ["bash", SCRIPT.as_posix(), "--help"],
         check=True,
         capture_output=True,
         text=True,
