@@ -81,9 +81,11 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
         *,
         api_token: str | None,
         cors_origins: Iterable[str],
+        webhook_secret: str | None = None,
     ) -> None:
         super().__init__(app)
         self.api_token = api_token
+        self.webhook_secret = webhook_secret
         self.cors_origins = frozenset(origin.rstrip("/") for origin in cors_origins)
 
     def _api_key_valid(self, request: Request, candidate: str | None) -> bool:
@@ -120,6 +122,24 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
             if hmac.compare_digest(authorization, expected):
                 return True
         return self._api_key_valid(request, request.headers.get("x-api-key"))
+
+    async def _webhook_authorized(self, request: Request) -> bool:
+        """Accept webhook HMAC-SHA256 signed requests (autonomy evaluate)."""
+        if not self.webhook_secret:
+            return False
+        signature = request.headers.get("x-hub-signature-256")
+        if not signature:
+            return False
+        body = await request.body()  # cached by Starlette; FastAPI reuses it
+        try:
+            if signature.startswith("sha256="):
+                expected = bytes.fromhex(signature[7:])
+            else:
+                expected = bytes.fromhex(signature)
+            computed = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).digest()
+            return hmac.compare_digest(computed, expected)
+        except Exception:
+            return False
 
     def _apply_cors(self, response: Response, origin: str | None) -> None:
         for header in tuple(response.headers.keys()):
@@ -172,15 +192,17 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
                     path,
                 )
         elif path not in _PUBLIC_PATHS and not self._authorized(request):
-            return self._finalize(
-                JSONResponse(
-                    status_code=401,
-                    content={"detail": "invalid or missing credentials"},
-                    headers={"WWW-Authenticate": "Bearer"},
-                ),
-                origin,
-                path,
-            )
+            # Allow webhook HMAC-SHA256 signed requests through to the endpoint
+            if not await self._webhook_authorized(request):
+                return self._finalize(
+                    JSONResponse(
+                        status_code=401,
+                        content={"detail": "invalid or missing credentials"},
+                        headers={"WWW-Authenticate": "Bearer"},
+                    ),
+                    origin,
+                    path,
+                )
 
         response = await call_next(request)
         return self._finalize(response, origin, path)
@@ -192,6 +214,7 @@ def create_app(
     publisher: Publisher | None = None,
     policy_store: PolicyStore | None = None,
     evidence_secret: str | None = None,
+    webhook_secret: str | None = None,
 ) -> FastAPI:
     """Create the public/production application with fail-closed security."""
     resolved_db_path = (
@@ -200,17 +223,22 @@ def create_app(
         else os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db")
     )
     resolved_token = api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
+    resolved_webhook_secret = (
+        webhook_secret if webhook_secret is not None else os.getenv("AFTERGRAPH_WEBHOOK_SECRET")
+    )
     app = create_core_app(
         db_path=resolved_db_path,
         api_token=resolved_token,
         publisher=publisher,
         policy_store=policy_store,
         evidence_secret=evidence_secret,
+        webhook_secret=resolved_webhook_secret,
     )
     app.add_middleware(
         ProductionSecurityMiddleware,
         api_token=resolved_token,
         cors_origins=_parse_origins(os.getenv("AFTERGRAPH_CORS_ORIGINS")),
+        webhook_secret=resolved_webhook_secret,
     )
     return app
 

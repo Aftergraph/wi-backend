@@ -107,3 +107,73 @@ def test_github_webhook_fails_closed_when_hmac_secret_missing(tmp_path, monkeypa
             headers={"X-GitHub-Event": "push"},
         )
     assert response.status_code == 503
+
+
+def test_webhook_hmac_passes_production_middleware(tmp_path):
+    """Valid HMAC-SHA256 signature must pass ProductionSecurityMiddleware."""
+    import hashlib
+    import hmac as _hmac_mod
+    import json as _json
+
+    secret = "test-production-webhook-secret"
+    body = {
+        "request_id": "adr_webhooktest123",
+        "tenant_id": "default",
+        "repository": "Aftergraph/test",
+        "ref": "refs/heads/main",
+        "head_sha": "a" * 40,
+        "event_key": "push",
+        "capability": "dependency.patch.merge",
+        "objective": "test",
+        "impact_summary": "test",
+        "evidence": [{"kind": "test"}],
+        "tests_passed": True,
+        "patch_release": True,
+        "changed_files": [],
+    }
+    raw = _json.dumps(body, separators=(",", ":")).encode()
+    sig = _hmac_mod.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+
+    app = create_app(
+        db_path=tmp_path / "secure.db",
+        api_token="master-token",
+        webhook_secret=secret,
+    )
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/autonomy/decisions/evaluate",
+            content=raw,
+            headers={
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": f"sha256={sig}",
+            },
+        )
+    assert resp.status_code == 200
+    assert resp.json()["decision"] in ("auto_approve", "manual_review", "reject")
+
+
+def test_webhook_hmac_rejected_with_wrong_secret(tmp_path):
+    """Invalid HMAC signature must be rejected through production middleware."""
+    import hashlib
+    import hmac as _hmac_mod
+    import json as _json
+
+    body = {"test": "data"}
+    raw = _json.dumps(body).encode()
+    sig = _hmac_mod.new(b"wrong-secret", raw, hashlib.sha256).hexdigest()
+
+    app = create_app(
+        db_path=tmp_path / "secure.db",
+        api_token="master-token",
+        webhook_secret="correct-secret",
+    )
+    with TestClient(app) as client:
+        resp = client.post(
+            "/v1/autonomy/decisions/evaluate",
+            content=raw,
+            headers={
+                "Content-Type": "application/json",
+                "X-Hub-Signature-256": f"sha256={sig}",
+            },
+        )
+    assert resp.status_code == 401
