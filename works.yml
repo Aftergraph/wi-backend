@@ -21,5 +21,4 @@ work:
           .venv-works/bin/ruff check src/ tests/
           .venv-works/bin/python -m pytest --tb=short -q
         cache: true
-        cache_key_inputs: [run, repository]
         timeout_s: 600
