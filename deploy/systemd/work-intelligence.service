@@ -1,0 +1,22 @@
+[Unit]
+Description=Aftergraph Work Intelligence V2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=work-intelligence
+Group=work-intelligence
+WorkingDirectory=/opt/work-intelligence
+EnvironmentFile=/etc/aftergraph/work-intelligence.env
+ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/work-intelligence /opt/work-intelligence/logs
+
+[Install]
+WantedBy=multi-user.target
