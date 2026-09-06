@@ -225,6 +225,24 @@ class TestAutonomyEndpoint:
             assert "trust_boundary" in br["affected_surfaces"] or "encryption" in br["affected_surfaces"]
             assert "metrics" in br["affected_surfaces"] or "logging" in br["affected_surfaces"]
 
+    def test_confidence_score_capped_at_80(self):
+        """Confidence score must never exceed 80 even with max bonuses."""
+        with _client() as client:
+            body = _make_request(
+                test_coverage_delta=30,
+                author_permission_tier=20,
+                critical_path_penalty=0,
+                line_churn_penalty=0,
+            )
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            confidence = resp.json()["confidence"]
+            assert confidence["score"] <= 80
+
     def test_evaluation_persisted_to_audit_trail(self):
         """POST evaluate must append to the autonomy_decisions audit trail."""
         with _client() as client:

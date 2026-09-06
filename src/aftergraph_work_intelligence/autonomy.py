@@ -275,17 +275,15 @@ def evaluate_autonomy(value: AutonomyEvaluationInput) -> dict[str, Any]:
     risk_level = _risk_level(value, factors)
     controls = _blocking_controls(value, factors)
     decision, human_required, reason = _decision(value, factors)
-    score = max(
-        0,
-        min(
-            100,
-            50
-            + value.test_coverage_delta
-            + value.author_permission_tier
-            - value.critical_path_penalty
-            - value.line_churn_penalty,
-        ),
-    )
+    # ponytail: sublinear confidence scoring — ceiling: no ML-based weighting.
+    # Upgrade path: train coefficients on historical approval/rejection data.
+    base_score = 50
+    coverage_bonus = min(value.test_coverage_delta, 15)  # cap at 15
+    perm_bonus = min(value.author_permission_tier, 15)  # cap at 15
+    critical_penalty = value.critical_path_penalty
+    churn_penalty = value.line_churn_penalty * 2  # double weight for churn
+    raw_score = base_score + coverage_bonus + perm_bonus - critical_penalty - churn_penalty
+    score = max(0, min(80, raw_score))  # hard cap at 80 for auto_approve
     observed_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     blast_radius = _compute_blast_radius(value)
     return {
