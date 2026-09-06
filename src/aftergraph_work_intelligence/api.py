@@ -772,17 +772,11 @@ Production-grade observation → WorkItem inference engine.
                 request.state.auth_scopes = ["read", "write"]
                 return
 
-        # Webhook HMAC-SHA256 signature (autonomy endpoint only)
-        webhook_secret = getattr(request.app.state, "webhook_secret", None)
-        if webhook_secret and x_hub_signature_256:
-            try:
-                body = await request.body()
-                if _verify_webhook_signature(body, x_hub_signature_256, webhook_secret):
-                    request.state.auth_method = "webhook"
-                    request.state.auth_scopes = ["read", "write"]
-                    return
-            except Exception:
-                pass
+        # Webhook HMAC-SHA256 signature — header presence defers verification to endpoint
+        if x_hub_signature_256 and getattr(request.app.state, "webhook_secret", None):
+            request.state.auth_method = "webhook_pending"
+            request.state.auth_scopes = ["read", "write"]
+            return
 
         # No valid auth
         if configured_token:
@@ -1442,13 +1436,22 @@ Production-grade observation → WorkItem inference engine.
         status_code=200,
         dependencies=[Depends(auth)],
     )
-    def autonomy_evaluate(request: Request, payload: AutonomyEvaluateRequest) -> dict[str, Any]:
+    async def autonomy_evaluate(request: Request, payload: AutonomyEvaluateRequest) -> dict[str, Any]:
         """Evaluate a bounded autonomous-execution proposal, fail-closed.
 
         This endpoint NEVER executes, approves, merges, retries, rolls back, or
         mutates an external system. It returns a sealed decision envelope that
         the caller may use to gate their own execution pipeline.
         """
+        # Webhook HMAC-SHA256 verification (deferred from auth dependency)
+        if getattr(request.state, "auth_method", None) == "webhook_pending":
+            webhook_secret = getattr(request.app.state, "webhook_secret", None)
+            signature = request.headers.get("X-Hub-Signature-256")
+            body = await request.body()
+            if not _verify_webhook_signature(body, signature, webhook_secret):
+                raise HTTPException(status_code=401, detail="invalid webhook signature")
+            request.state.auth_method = "webhook"
+
         evaluation = evaluate_autonomy(
             AutonomyEvaluationInput(
                 request_id=payload.request_id,
