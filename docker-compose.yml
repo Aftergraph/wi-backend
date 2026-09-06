@@ -6,14 +6,16 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - AFTERGRAPH_API_TOKEN=${AFTERGRAPH_API_TOKEN:-changeme}
-      - AFTERGRAPH_RATE_LIMIT=60
-      - AFTERGRAPH_EVIDENCE_SECRET=${AFTERGRAPH_EVIDENCE_SECRET:-secret}
+      - AFTERGRAPH_API_TOKEN=${AFTERGRAPH_API_TOKEN:?AFTERGRAPH_API_TOKEN is required}
+      - AFTERGRAPH_EVIDENCE_SECRET=${AFTERGRAPH_EVIDENCE_SECRET:?AFTERGRAPH_EVIDENCE_SECRET is required}
+      - AFTERGRAPH_GITHUB_WEBHOOK_SECRET=${AFTERGRAPH_GITHUB_WEBHOOK_SECRET:?AFTERGRAPH_GITHUB_WEBHOOK_SECRET is required}
+      - AFTERGRAPH_CORS_ORIGINS=${AFTERGRAPH_CORS_ORIGINS:-https://work-intelligence.rendetalje.dk}
+      - AFTERGRAPH_RATE_LIMIT=${AFTERGRAPH_RATE_LIMIT:-60}
     volumes:
       - data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
+      test: ["CMD", "python", "-c", "import httpx; r=httpx.get('http://localhost:8000/healthz'); r.raise_for_status()"]
       interval: 30s
       timeout: 10s
       retries: 3
