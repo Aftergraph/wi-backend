@@ -362,3 +362,20 @@ class TestAutonomyEndpoint:
                 headers={"X-Hub-Signature-256": signature},
             )
             assert resp.status_code == 401
+
+    def test_evaluate_endpoint_rate_limited(self):
+        """The evaluator has a stricter per-endpoint budget (default 20/min)."""
+        with _client() as client:
+            for _ in range(20):
+                resp = client.post(
+                    "/v1/autonomy/decisions/evaluate",
+                    json=_make_request(),
+                    headers={"Authorization": "Bearer test-token"},
+                )
+                assert resp.status_code == 200
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=_make_request(),
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 429

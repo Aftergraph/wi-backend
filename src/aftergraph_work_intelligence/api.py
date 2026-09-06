@@ -428,6 +428,13 @@ def create_app(
         "AFTERGRAPH_EVIDENCE_SECRET", "aftergraph-work-intelligence"
     )
     rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("AFTERGRAPH_RATE_LIMIT", "60")))
+    # Stricter per-endpoint budget for the autonomy evaluator: it is read-only and
+    # fail-closed, but each call is compute-heavy — a modest default keeps an
+    # unauthenticated caller from pinning CPU via the public webhook path.
+    rate_limiter.set_endpoint_limit(
+        "/v1/autonomy/decisions/evaluate",
+        int(os.getenv("AFTERGRAPH_AUTONOMY_RATE_LIMIT", "20")),
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -1451,6 +1458,13 @@ Production-grade observation → WorkItem inference engine.
             if not _verify_webhook_signature(body, signature, webhook_secret):
                 raise HTTPException(status_code=401, detail="invalid webhook signature")
             request.state.auth_method = "webhook"
+
+        # Per-authentication-method budget for the evaluator (20 req/min default).
+        auth_method = getattr(request.state, "auth_method", "unknown")
+        if not request.app.state.rate_limiter.is_allowed(
+            f"autonomy:{auth_method}", "/v1/autonomy/decisions/evaluate"
+        ):
+            raise HTTPException(status_code=429, detail="Autonomy evaluation rate limit exceeded")
 
         evaluation = evaluate_autonomy(
             AutonomyEvaluationInput(
