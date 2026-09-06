@@ -3,11 +3,9 @@ set -Eeuo pipefail
 
 REPO_DIR="/opt/work-intelligence"
 SERVICE="work-intelligence"
-FRONTEND_SERVICE="work-intelligence-web"
-ENV_FILE="/etc/work-intelligence-webhook.secret"
-UNIT_SOURCE="deploy/systemd/work-intelligence.service"
-VDS_BACKEND_OVERRIDE="deploy/systemd/work-intelligence-vds.conf"
-VDS_FRONTEND_OVERRIDE="deploy/systemd/work-intelligence-web-vds.conf"
+ENV_FILE="/etc/aftergraph/work-intelligence.env"
+UNIT_SOURCE="deploy/systemd/work-intelligence-vds.service"
+UNIT_DEST="/etc/systemd/system/${SERVICE}.service"
 LOCAL_API="http://172.17.0.1:8090"
 LOCAL_FRONTEND="http://127.0.0.1:3001"
 PUBLIC_API="https://intel.rendetalje.dk"
@@ -24,12 +22,12 @@ Usage:
 
 Options:
   --sha SHA            Exact verified commit to deploy. Required.
-  --install-unit       Install the checked-in VDS systemd overrides before restart.
+  --install-unit       Install the complete canonical VDS systemd unit before restart.
   --preflight-only     Validate host/repo/env/unit prerequisites without changing production.
   --skip-public        Skip the final public-hostname security probe.
   --repo-dir PATH      Deployment checkout. Default: /opt/work-intelligence
   --service NAME       systemd service. Default: work-intelligence
-  --env-file PATH      Production environment file. Default: /etc/work-intelligence-webhook.secret
+  --env-file PATH      Production environment file. Default: /etc/aftergraph/work-intelligence.env
   --local-api URL      Local API base. Default: http://172.17.0.1:8090
   --public-api URL     Public API base. Default: https://intel.rendetalje.dk
   -h, --help           Show this help.
@@ -133,9 +131,7 @@ git_repo fetch --prune origin main
 REMOTE_SHA="$(git_repo rev-parse origin/main)"
 [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || fail "requested SHA is not the current origin/main exact head ($REMOTE_SHA)"
 git_repo cat-file -e "${TARGET_SHA}^{commit}" || fail "requested SHA is not available in the deployment checkout"
-git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}" || fail "canonical systemd unit is missing from requested target SHA"
-git_repo cat-file -e "${TARGET_SHA}:${VDS_BACKEND_OVERRIDE}" || fail "VDS backend override is missing from requested target SHA"
-git_repo cat-file -e "${TARGET_SHA}:${VDS_FRONTEND_OVERRIDE}" || fail "VDS frontend override is missing from requested target SHA"
+git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}" || fail "canonical VDS systemd unit is missing from requested target SHA"
 
 DB_PATH="$(root python3 - "$ENV_FILE" <<'PY'
 from __future__ import annotations
@@ -187,11 +183,18 @@ PY
 
 [[ -n "$DB_PATH" ]] || fail "AFTERGRAPH_DB resolved to an empty path"
 
-if ((INSTALL_UNIT == 0)); then
-  UNIT_TEXT="$(root systemctl cat "$SERVICE" 2>/dev/null)" || fail "systemd service is missing: $SERVICE"
-  grep -Fq "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$UNIT_TEXT" \
-    || fail "current systemd service bypasses the secure production entrypoint; rerun with --install-unit"
-fi
+CURRENT_USER="$(root systemctl show "$SERVICE" -p User --value 2>/dev/null)" || fail "systemd service is missing: $SERVICE"
+CURRENT_GROUP="$(root systemctl show "$SERVICE" -p Group --value 2>/dev/null)"
+CURRENT_ENV="$(root systemctl show "$SERVICE" -p EnvironmentFiles --value 2>/dev/null)"
+CURRENT_EXEC="$(root systemctl show "$SERVICE" -p ExecStart --value 2>/dev/null)"
+CURRENT_DROPINS="$(root systemctl show "$SERVICE" -p DropInPaths --value 2>/dev/null)"
+
+[[ "$CURRENT_USER" == "work-intelligence" ]] || fail "production service user is not work-intelligence"
+[[ "$CURRENT_GROUP" == "work-intelligence" ]] || fail "production service group is not work-intelligence"
+[[ "$CURRENT_ENV" == *"/etc/aftergraph/work-intelligence.env"* ]] || fail "production service does not use the canonical backend env"
+grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$CURRENT_EXEC" \
+  || fail "current systemd service bypasses the secure production entrypoint"
+[[ -z "$CURRENT_DROPINS" ]] || fail "production service has unexpected systemd drop-ins: $CURRENT_DROPINS"
 
 printf 'preflight_target=%s\n' "$TARGET_SHA"
 printf 'preflight_origin_main=%s\n' "$REMOTE_SHA"
@@ -235,41 +238,34 @@ fi
 git_repo switch main
 git_repo merge --ff-only "$TARGET_SHA"
 [[ "$(git_repo rev-parse HEAD)" == "$TARGET_SHA" ]] || fail "checkout did not land on requested exact SHA"
-[[ -f "$REPO_DIR/$UNIT_SOURCE" ]] || fail "canonical systemd unit missing after exact-head checkout"
-[[ -f "$REPO_DIR/$VDS_BACKEND_OVERRIDE" ]] || fail "VDS backend override missing after exact-head checkout"
-[[ -f "$REPO_DIR/$VDS_FRONTEND_OVERRIDE" ]] || fail "VDS frontend override missing after exact-head checkout"
+[[ -f "$REPO_DIR/$UNIT_SOURCE" ]] || fail "canonical VDS systemd unit missing after exact-head checkout"
 
 uv pip install --python "$REPO_DIR/.venv/bin/python" -e "$REPO_DIR"
 
 if ((INSTALL_UNIT)); then
-  BACKEND_DROPIN_DIR="/etc/systemd/system/${SERVICE}.service.d"
-  FRONTEND_DROPIN_DIR="/etc/systemd/system/${FRONTEND_SERVICE}.service.d"
-  BACKEND_DROPIN="${BACKEND_DROPIN_DIR}/10-secure-entrypoint.conf"
-  FRONTEND_DROPIN="${FRONTEND_DROPIN_DIR}/10-private-backend.conf"
-
-  root install -d -m 0755 "$BACKEND_DROPIN_DIR" "$FRONTEND_DROPIN_DIR"
-  if root test -f "$BACKEND_DROPIN"; then
-    UNIT_BACKUP="$BACKUP_DIR/10-secure-entrypoint.conf.${TIMESTAMP}"
-    root cp -a "$BACKEND_DROPIN" "$UNIT_BACKUP"
-    printf 'backend_override_backup=%s\n' "$UNIT_BACKUP"
+  if root test -f "$UNIT_DEST"; then
+    UNIT_BACKUP="$BACKUP_DIR/work-intelligence.service.${TIMESTAMP}"
+    root cp -a "$UNIT_DEST" "$UNIT_BACKUP"
+    printf 'unit_backup=%s\n' "$UNIT_BACKUP"
   fi
-  if root test -f "$FRONTEND_DROPIN"; then
-    FRONTEND_BACKUP="$BACKUP_DIR/10-private-backend.conf.${TIMESTAMP}"
-    root cp -a "$FRONTEND_DROPIN" "$FRONTEND_BACKUP"
-    printf 'frontend_override_backup=%s\n' "$FRONTEND_BACKUP"
-  fi
-  root install -m 0644 "$REPO_DIR/$VDS_BACKEND_OVERRIDE" "$BACKEND_DROPIN"
-  root install -m 0644 "$REPO_DIR/$VDS_FRONTEND_OVERRIDE" "$FRONTEND_DROPIN"
+  root install -m 0644 "$REPO_DIR/$UNIT_SOURCE" "$UNIT_DEST"
 fi
 
 root systemctl daemon-reload
 EFFECTIVE_EXEC="$(root systemctl show "$SERVICE" -p ExecStart --value 2>/dev/null)" || fail "unable to resolve effective systemd ExecStart"
+EFFECTIVE_USER="$(root systemctl show "$SERVICE" -p User --value 2>/dev/null)"
+EFFECTIVE_GROUP="$(root systemctl show "$SERVICE" -p Group --value 2>/dev/null)"
+EFFECTIVE_ENV="$(root systemctl show "$SERVICE" -p EnvironmentFiles --value 2>/dev/null)"
+EFFECTIVE_DROPINS="$(root systemctl show "$SERVICE" -p DropInPaths --value 2>/dev/null)"
 grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$EFFECTIVE_EXEC" \
   || fail "effective systemd ExecStart does not use the secure production entrypoint"
+[[ "$EFFECTIVE_USER" == "work-intelligence" ]] || fail "effective systemd user is not work-intelligence"
+[[ "$EFFECTIVE_GROUP" == "work-intelligence" ]] || fail "effective systemd group is not work-intelligence"
+[[ "$EFFECTIVE_ENV" == *"/etc/aftergraph/work-intelligence.env"* ]] || fail "effective systemd env is not canonical"
+[[ -z "$EFFECTIVE_DROPINS" ]] || fail "effective systemd service has unexpected drop-ins: $EFFECTIVE_DROPINS"
 
-root systemctl enable "$SERVICE" "$FRONTEND_SERVICE" >/dev/null
+root systemctl enable "$SERVICE" >/dev/null
 root systemctl restart "$SERVICE"
-root systemctl restart "$FRONTEND_SERVICE"
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT

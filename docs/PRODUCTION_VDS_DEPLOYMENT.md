@@ -16,7 +16,7 @@ Verified on 2026-09-06:
 - named Cloudflare Tunnel network: `renos-control-edge` (`172.21.0.0/16`)
 - named tunnel API origin: `http://172.17.0.1:8090`
 - SQLite database: `/var/lib/work-intelligence/wi.db`
-- current secret source: `/etc/work-intelligence-webhook.secret`
+- canonical backend environment: `/etc/aftergraph/work-intelligence.env`
 - UFW permits `8090/tcp` from `172.21.0.0/16`
 
 The backend must not be changed to `127.0.0.1:8090` while the named tunnel
@@ -33,10 +33,10 @@ The deployment is exact-SHA and fail-closed. It refuses to promote when:
 
 - the requested SHA is not the current `origin/main` head;
 - the deployment worktree is dirty;
-- the measured production secret file is unreadable or core auth/integration
+- the canonical backend environment is unreadable or core auth/integration
   keys are missing;
 - DB, listener, port, or CORS settings conflict with the measured VDS contract;
-- the VDS backend/frontend override files are absent from the target SHA;
+- the canonical VDS backend systemd unit is absent from the target SHA;
 - the effective backend process bypasses the secure console entrypoint;
 - local or public post-deploy security probes fail.
 
@@ -63,9 +63,9 @@ bash -n /tmp/work-intelligence-deploy.sh
 bash /tmp/work-intelligence-deploy.sh   --sha "$TARGET"   --install-unit   --preflight-only
 ```
 
-`--install-unit` is retained for CLI compatibility. On this VDS it means
-"install the checked-in VDS systemd overrides", not "replace the legacy base
-unit with a different service-account/runtime layout".
+`--install-unit` installs the complete checked-in canonical VDS backend unit.
+It does not create backend or frontend drop-ins and does not restart the frontend
+service.
 
 Expected marker:
 
@@ -86,11 +86,11 @@ The helper performs:
 3. online SQLite backup with Python's backup API;
 4. fast-forward checkout to the verified SHA;
 5. editable package refresh with `uv pip` against the existing production venv;
-6. backup and installation of the checked-in backend and frontend VDS drop-ins;
-7. backend and frontend restart;
-8. secure-entrypoint verification;
+6. backup and installation of the complete canonical backend VDS unit;
+7. backend restart only;
+8. dedicated-user, canonical-env, no-drop-in and secure-entrypoint verification;
 9. local API health/auth/CORS/security-header checks;
-10. local frontend authenticated `/api/*` proxy check;
+10. local frontend authenticated `/api/*` proxy check without restarting the web service;
 11. public API health/auth/CORS/security-header checks;
 12. public frontend and `/api/*` proxy checks.
 
@@ -118,7 +118,7 @@ systemctl status --no-pager work-intelligence work-intelligence-web
 journalctl -u work-intelligence -n 100 --no-pager
 ```
 
-Use the exact database and drop-in backups emitted by the deployment helper for
-a deliberate rollback. Do not improvise around a failed security probe. A green
-CI badge is charming, but it is not a substitute for the process actually
-serving the public hostname.
+Use the exact database and systemd-unit backups emitted by the deployment helper
+for a deliberate rollback. Do not bypass a failed security probe. A successful CI
+result does not by itself prove that the process serving the public hostname is
+healthy.
