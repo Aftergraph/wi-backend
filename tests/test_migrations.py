@@ -86,8 +86,8 @@ class TestRunMigrations:
     def test_run_migrations(self, tmp_path):
         db = tmp_path / "test.db"
         result = run_migrations(db)
-        assert result["current_version"] == 4
-        assert result["total_applied"] == 4
+        assert result["current_version"] == 5
+        assert result["total_applied"] == 5
 
     def test_run_migrations_idempotent(self, tmp_path):
         db = tmp_path / "test.db"

@@ -59,6 +59,7 @@ class Transition:
     reason: str
     at: datetime
     resume_at: datetime | None = None
+    idempotency_key: str | None = None
 
 
 class TransitionEngine:
@@ -76,9 +77,9 @@ class TransitionEngine:
     def reject(self, work_item_id: str, *, actor: str, reason: str = "") -> Any:
         return self._apply(work_item_id, to_state="REJECTED", actor=actor, reason=reason)
 
-    def cancel(self, work_item_id: str, *, actor: str = "", reason: str = "") -> Any:
+    def cancel(self, work_item_id: str, *, actor: str = "", reason: str = "", idempotency_key: str | None = None) -> Any:
         # Operator path — actor may be empty (system-cancel).
-        return self._apply(work_item_id, to_state="CANCELLED", actor=actor or "system", reason=reason)
+        return self._apply(work_item_id, to_state="CANCELLED", actor=actor or "system", reason=reason, idempotency_key=idempotency_key)
 
     def snooze(self, work_item_id: str, *, actor: str, resume_at: datetime, reason: str = "") -> Any:
         if not actor:
@@ -125,6 +126,7 @@ class TransitionEngine:
         actor: str,
         reason: str = "",
         resume_at: datetime | None = None,
+        idempotency_key: str | None = None,
     ) -> Any:
         if not actor:
             raise ValueError("actor is required")
@@ -154,6 +156,7 @@ class TransitionEngine:
             reason=reason or "",
             at=at,
             resume_at=resume_at,
+            idempotency_key=idempotency_key,
         )
         self.store.write_transition(transition, new_status=to_state, updated_at=at)
         updated = self.store.get_work_item(work_item_id)

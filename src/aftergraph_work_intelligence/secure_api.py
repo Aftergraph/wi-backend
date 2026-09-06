@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
+from .api import any_tenant_webhook_secrets
 from .api import create_app as create_core_app
 from .policy import PolicyStore
 from .publishers import Publisher
@@ -125,21 +126,28 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
 
     async def _webhook_authorized(self, request: Request) -> bool:
         """Accept webhook HMAC-SHA256 signed requests (autonomy evaluate)."""
-        if not self.webhook_secret:
-            return False
         signature = request.headers.get("x-hub-signature-256")
         if not signature:
             return False
-        body = await request.body()  # cached by Starlette; FastAPI reuses it
-        try:
-            if signature.startswith("sha256="):
-                expected = bytes.fromhex(signature[7:])
-            else:
-                expected = bytes.fromhex(signature)
-            computed = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).digest()
-            return hmac.compare_digest(computed, expected)
-        except Exception:
-            return False
+        if self.webhook_secret:
+            body = await request.body()  # cached by Starlette; FastAPI reuses it
+            try:
+                if signature.startswith("sha256="):
+                    expected = bytes.fromhex(signature[7:])
+                else:
+                    expected = bytes.fromhex(signature)
+                computed = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).digest()
+                if hmac.compare_digest(computed, expected):
+                    return True
+            except Exception:
+                return False
+        # Per-tenant secrets resolve at the handler (claimed tenant is only
+        # known after body parsing). Defer — the endpoint verifies or 401s.
+        # ponytail: same deferred-verification shape ADR-008 already accepts.
+        if any_tenant_webhook_secrets():
+            request.state.webhook_tenant_deferred = True
+            return True
+        return False
 
     def _apply_cors(self, response: Response, origin: str | None) -> None:
         for header in tuple(response.headers.keys()):

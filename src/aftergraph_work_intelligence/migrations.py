@@ -166,6 +166,15 @@ MIGRATIONS = [
         ON autonomy_decisions(decision);
         """,
     ),
+    (
+        5,
+        "add_transition_idempotency_key",
+        """
+        ALTER TABLE intake_transitions ADD COLUMN idempotency_key TEXT;
+        CREATE INDEX IF NOT EXISTS idx_intake_transitions_idempotency
+        ON intake_transitions(idempotency_key);
+        """,
+    ),
 ]
 
 

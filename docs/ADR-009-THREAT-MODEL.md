@@ -52,13 +52,18 @@
 
 ## 5. Residual risks (accepted, not hidden)
 
-- R1: Single shared webhook secret across tenants (rotation via
-  `scripts/rotate-webhook-secret.sh`; per-tenant secrets deferred until a
-  tenant-aware webhook registry exists).
+- R1 (partially closed 2026-09-07): per-tenant webhook secrets are supported
+  via `AFTERGRAPH_WEBHOOK_SECRET_<TENANT>` (uppercased, non-alphanumerics to
+  `_`) with global fallback; the handler resolves by claimed tenant, so a key
+  for tenant A never verifies tenant B (`test_webhook_tenant_secrets.py`).
+  Rotation per tenant: `scripts/rotate-webhook-secret.sh [TENANT]`. The
+  production middleware defers signature-present requests to the handler when
+  the per-tenant namespace is configured; the endpoint still 401s on mismatch.
 - R2: No per-tenant database isolation; isolation is query-scoped
-  (`tenant_id` on every read/write). A missing tenant filter in a future
-  endpoint would be a cross-tenant read — new endpoints must add a
-  tenant-scoping test following `test_merge_is_tenant_scoped`.
+  (`tenant_id` on every read/write). Isolation maturity: **L1 (enforced query
+  scoping)** — every new endpoint must add a tenant-scoping test following
+  `test_merge_is_tenant_scoped`. L2 (PostgreSQL RLS) or higher requires a
+  storage-backend migration and is explicitly out of scope for SQLite.
 - R3: Local dev mode (`create_app` without token) is unauthenticated by
   design; it must never bind a public interface (deploy script binds
   `172.17.0.1` only).

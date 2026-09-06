@@ -89,10 +89,13 @@ CREATE TABLE IF NOT EXISTS intake_transitions (
     actor TEXT NOT NULL,
     reason TEXT NOT NULL,
     resume_at TEXT,
-    at TEXT NOT NULL
+    at TEXT NOT NULL,
+    idempotency_key TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_intake_transitions_work
 ON intake_transitions(work_item_id, at ASC);
+CREATE INDEX IF NOT EXISTS idx_intake_transitions_idempotency
+ON intake_transitions(idempotency_key);
 
 CREATE TABLE IF NOT EXISTS tenant_policies (
     tenant_id TEXT PRIMARY KEY,
@@ -541,8 +544,8 @@ class SQLiteStore:
                 self._db.execute(
                     """
                     INSERT INTO intake_transitions
-                    (id, work_item_id, from_state, to_state, actor, reason, resume_at, at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, work_item_id, from_state, to_state, actor, reason, resume_at, at, idempotency_key)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         transition.id,
@@ -553,6 +556,7 @@ class SQLiteStore:
                         transition.reason,
                         _t_iso(transition.resume_at) if transition.resume_at is not None else None,
                         _t_iso(transition.at),
+                        transition.idempotency_key,
                     ),
                 )
                 self._db.execute(
@@ -575,6 +579,7 @@ class SQLiteStore:
         result = []
         for row in rows:
             resume_at = _dt(row["resume_at"]) if row["resume_at"] else None
+            keys = row.keys()
             result.append(
                 Transition(
                     id=row["id"],
@@ -585,6 +590,35 @@ class SQLiteStore:
                     reason=row["reason"],
                     at=_dt(row["at"]),
                     resume_at=resume_at,
+                    idempotency_key=row["idempotency_key"] if "idempotency_key" in keys else None,
+                )
+            )
+        return result
+
+    def find_transition_by_idempotency_key(self, idempotency_key: str) -> list:
+        """Return merge/cancel transitions recorded under this key (cross-restart replay)."""
+        from .transitions import Transition, _dt  # type: ignore
+
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT * FROM intake_transitions WHERE idempotency_key = ? ORDER BY at ASC",
+                (idempotency_key,),
+            ).fetchall()
+        result = []
+        for row in rows:
+            resume_at = _dt(row["resume_at"]) if row["resume_at"] else None
+            keys = row.keys()
+            result.append(
+                Transition(
+                    id=row["id"],
+                    work_item_id=row["work_item_id"],
+                    from_state=row["from_state"],
+                    to_state=row["to_state"],
+                    actor=row["actor"],
+                    reason=row["reason"],
+                    at=_dt(row["at"]),
+                    resume_at=resume_at,
+                    idempotency_key=row["idempotency_key"] if "idempotency_key" in keys else None,
                 )
             )
         return result

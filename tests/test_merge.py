@@ -31,7 +31,7 @@ def test_merge_marks_duplicate_cancelled_and_links_target(tmp_path):
 
         response = _merge(client, duplicate, "renos", canonical)
         assert response.status_code == 200, response.text
-        assert response.json()["merged_into_work_item_id"] == canonical
+        assert response.json()["work_item"]["merged_into_work_item_id"] == canonical
 
         detail = client.get(f"/v1/work-items/{duplicate}", params={"tenant_id": "renos"})
         assert detail.json()["work_item"]["status"] == "CANCELLED"
@@ -48,7 +48,8 @@ def test_merge_replay_is_idempotent(tmp_path):
         assert _merge(client, duplicate, "renos", canonical).status_code == 200
         replay = _merge(client, duplicate, "renos", canonical)
         assert replay.status_code == 200
-        assert replay.json()["merged_into_work_item_id"] == canonical
+        assert replay.json()["work_item"]["merged_into_work_item_id"] == canonical
+        assert replay.json()["evidence"]["idempotent_replay"] is True
 
 
 def test_merge_rejects_self_merge_and_unknown_target(tmp_path):
@@ -89,3 +90,72 @@ def test_merge_conflicts_when_already_cancelled_for_another_reason(tmp_path):
 
         conflict = _merge(client, cancelled, "renos", canonical)
         assert conflict.status_code == 409
+
+
+def test_merge_evidence_envelope_is_reconstructable(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from aftergraph_work_intelligence.api import create_app
+
+    with TestClient(create_app(db_path=tmp_path / "merge-ev.db")) as client:
+        canonical = _ingest(client, "renos", "Vi skal smøre låsen i bagdøren", "me-1")
+        duplicate = _ingest(client, "renos", "Vi skal pudse spejlet i forhallen", "me-2")
+
+        response = client.post(
+            f"/v1/work-items/{duplicate}/merge",
+            params={"tenant_id": "renos"},
+            json={"actor": "e2e", "target_work_item_id": canonical, "idempotency_key": "key-evidence-1"},
+        )
+        assert response.status_code == 200, response.text
+        evidence = response.json()["evidence"]
+        assert evidence["actor"] == "e2e"
+        assert evidence["tenant_id"] == "renos"
+        assert evidence["source_work_item_id"] == duplicate
+        assert evidence["target_work_item_id"] == canonical
+        assert evidence["previous_state"] == "OPEN"
+        assert evidence["resulting_state"] == "CANCELLED"
+        assert evidence["idempotency_key"] == "key-evidence-1"
+        assert evidence["idempotent_replay"] is False
+        assert evidence["decided_at"]
+        assert evidence["trace_id"]
+
+
+def test_merge_idempotency_key_replay_and_reuse_conflict(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from aftergraph_work_intelligence.api import create_app
+
+    with TestClient(create_app(db_path=tmp_path / "merge-key.db")) as client:
+        canonical = _ingest(client, "renos", "Vi skal male gavlen til foråret", "mk-1")
+        other = _ingest(client, "renos", "Vi skal rense tagrenderne", "mk-2")
+        duplicate = _ingest(client, "renos", "Vi skal ordne bedet ved muren", "mk-3")
+
+        first = client.post(
+            f"/v1/work-items/{duplicate}/merge",
+            params={"tenant_id": "renos"},
+            json={"actor": "e2e", "target_work_item_id": canonical, "idempotency_key": "key-reuse-1"},
+        )
+        assert first.status_code == 200
+
+        replay = client.post(
+            f"/v1/work-items/{duplicate}/merge",
+            params={"tenant_id": "renos"},
+            json={"actor": "e2e", "target_work_item_id": canonical, "idempotency_key": "key-reuse-1"},
+        )
+        assert replay.status_code == 200
+        assert replay.json()["evidence"]["idempotent_replay"] is True
+
+        reuse = client.post(
+            f"/v1/work-items/{duplicate}/merge",
+            params={"tenant_id": "renos"},
+            json={"actor": "e2e", "target_work_item_id": other, "idempotency_key": "key-reuse-1"},
+        )
+        assert reuse.status_code == 409
+
+
+def test_migration_v5_adds_idempotency_column(tmp_path):
+    from aftergraph_work_intelligence.migrations import run_migrations
+
+    result = run_migrations(db_path=tmp_path / "mig5.db")
+    assert result["current_version"] >= 5
+    assert any(m["version"] == 5 for m in result["migrations"])

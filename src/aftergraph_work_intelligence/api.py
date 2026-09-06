@@ -7,6 +7,7 @@ import hmac as _hmac
 import json
 import logging
 import os
+import re
 import sys
 import threading as _threading
 import time
@@ -284,6 +285,7 @@ class MergeRequest(BaseModel):
     actor: str = Field(min_length=1, max_length=512)
     reason: str = Field(default="", max_length=2048)
     target_work_item_id: str = Field(min_length=1, max_length=512)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
 
 
 class BulkStatusRequest(BaseModel):
@@ -334,6 +336,31 @@ class AutonomyEvaluateRequest(BaseModel):
     critical_path_penalty: int = Field(default=0, ge=0, le=40)
     line_churn_penalty: int = Field(default=0, ge=0, le=10)
     changed_files: list[str] = Field(default_factory=list, max_length=2000)
+
+
+_TENANT_WEBHOOK_SECRET_PREFIX = "AFTERGRAPH_WEBHOOK_SECRET_"
+
+
+def _tenant_secret_env_name(tenant_id: str) -> str:
+    slug = re.sub(r"\W", "_", tenant_id).upper().strip("_") or "DEFAULT"
+    return f"{_TENANT_WEBHOOK_SECRET_PREFIX}{slug}"
+
+
+def resolve_webhook_secret(tenant_id: str | None, configured_global: str | None) -> str | None:
+    """Resolve the HMAC secret for a tenant: per-tenant env override, else global.
+
+    ponytail: env-based, no plaintext secrets in the DB. Fail-closed None.
+    """
+    if tenant_id:
+        specific = os.getenv(_tenant_secret_env_name(tenant_id))
+        if specific:
+            return specific
+    return configured_global
+
+
+def any_tenant_webhook_secrets() -> bool:
+    """True when at least one per-tenant webhook secret is configured."""
+    return any(key.startswith(_TENANT_WEBHOOK_SECRET_PREFIX) for key in os.environ)
 
 
 def _verify_webhook_signature(
@@ -787,7 +814,9 @@ Production-grade observation → WorkItem inference engine.
                 return
 
         # Webhook HMAC-SHA256 signature — header presence defers verification to endpoint
-        if x_hub_signature_256 and getattr(request.app.state, "webhook_secret", None):
+        if x_hub_signature_256 and (
+            getattr(request.app.state, "webhook_secret", None) or any_tenant_webhook_secrets()
+        ):
             request.state.auth_method = "webhook_pending"
             request.state.auth_scopes = ["read", "write"]
             return
@@ -935,23 +964,51 @@ Production-grade observation → WorkItem inference engine.
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
         engine: TransitionEngine = request.app.state.transitions
+        store: SQLiteStore = request.app.state.store
         reason = payload.reason or f"merged into {payload.target_work_item_id}"
-        if source.work_item.status == "CANCELLED":
+        key = payload.idempotency_key
+        previous_state = source.work_item.status
+
+        def evidence(item: Any, replay: bool) -> dict[str, Any]:
+            return {
+                "actor": payload.actor,
+                "tenant_id": tenant_id,
+                "source_work_item_id": work_item_id,
+                "target_work_item_id": payload.target_work_item_id,
+                "reason": reason,
+                "previous_state": previous_state,
+                "resulting_state": item["status"] if isinstance(item, dict) else item.status,
+                "idempotency_key": key,
+                "idempotent_replay": replay,
+                "decided_at": utc_now().isoformat(),
+                "auth_method": getattr(request.state, "auth_method", "unknown"),
+                "trace_id": request.headers.get("X-Request-ID") or f"merge_{uuid.uuid4().hex[:12]}",
+            }
+
+        def respond(item: Any, replay: bool) -> dict[str, Any]:
+            encoded = jsonable_encoder(asdict(item)) if not isinstance(item, dict) else item
+            encoded["merged_into_work_item_id"] = payload.target_work_item_id
+            return {"work_item": encoded, "evidence": evidence(encoded, replay)}
+
+        # Cross-restart idempotency: a recorded key decides before any mutation.
+        if key:
+            for prior in store.find_transition_by_idempotency_key(key):
+                if prior.work_item_id == work_item_id and prior.reason == reason:
+                    return respond(source.work_item, replay=True)
+                raise HTTPException(status_code=409, detail="idempotency key already used for a different merge")
+        if previous_state == "CANCELLED":
             last = engine.last_transition(work_item_id)
-            if last is not None and last.to_state == "CANCELLED" and last.reason == reason:
-                result = jsonable_encoder(asdict(source.work_item))
-                result["merged_into_work_item_id"] = payload.target_work_item_id
-                return result
+            if last is not None and last.to_state == "CANCELLED" and last.reason == reason and last.idempotency_key == key:
+                return respond(source.work_item, replay=True)
             raise HTTPException(status_code=409, detail="work item already cancelled for another reason")
         try:
-            item = engine.cancel(work_item_id, actor=payload.actor, reason=reason)
+            item = engine.cancel(work_item_id, actor=payload.actor, reason=reason, idempotency_key=key)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        result = jsonable_encoder(asdict(item))
-        result["merged_into_work_item_id"] = payload.target_work_item_id
-        _fire_webhooks(request.app.state, "work_item.merged", result)
+        result = respond(item, replay=False)
+        _fire_webhooks(request.app.state, "work_item.merged", jsonable_encoder(result))
         return result
 
     @router.post("/work-items/{work_item_id}/publish", status_code=201, dependencies=[Depends(auth)])
@@ -1500,9 +1557,13 @@ Production-grade observation → WorkItem inference engine.
         mutates an external system. It returns a sealed decision envelope that
         the caller may use to gate their own execution pipeline.
         """
-        # Webhook HMAC-SHA256 verification (deferred from auth dependency)
+        # Webhook HMAC-SHA256 verification (deferred from auth dependency).
+        # Secret resolves per-tenant (claimed tenant) with global fallback —
+        # a key for tenant A never verifies a payload claiming tenant B.
         if getattr(request.state, "auth_method", None) == "webhook_pending":
-            webhook_secret = getattr(request.app.state, "webhook_secret", None)
+            webhook_secret = resolve_webhook_secret(
+                payload.tenant_id, getattr(request.app.state, "webhook_secret", None)
+            )
             signature = request.headers.get("X-Hub-Signature-256")
             body = await request.body()
             if not _verify_webhook_signature(body, signature, webhook_secret):
