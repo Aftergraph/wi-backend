@@ -1,6 +1,5 @@
 from pathlib import Path
 
-
 SCRIPT = Path("scripts/deploy-production-vds.sh")
 
 
