@@ -4,7 +4,7 @@ import subprocess
 from pathlib import Path
 
 SCRIPT = Path("scripts/deploy-production-vds.sh")
-UNIT = Path("deploy/systemd/work-intelligence.service")
+UNIT = Path("deploy/systemd/work-intelligence-vds.service")
 
 
 def test_deploy_script_has_valid_bash_syntax() -> None:
@@ -41,9 +41,9 @@ def test_deploy_script_fails_closed_on_source_env_auth_cors_and_headers() -> Non
     assert "src.backup(dst)" in text
     assert "useradd --system --user-group" not in text
     assert 'uv pip install --python "$REPO_DIR/.venv/bin/python" -e "$REPO_DIR"' in text
-    assert 'VDS_BACKEND_OVERRIDE="deploy/systemd/work-intelligence-vds.conf"' in text
-    assert 'VDS_FRONTEND_OVERRIDE="deploy/systemd/work-intelligence-web-vds.conf"' in text
-    assert 'systemctl restart "$FRONTEND_SERVICE"' in text
+    assert 'UNIT_DEST="/etc/systemd/system/${SERVICE}.service"' in text
+    assert 'root install -m 0644 "$REPO_DIR/$UNIT_SOURCE" "$UNIT_DEST"' in text
+    assert 'systemctl restart "$FRONTEND_SERVICE"' not in text
     assert 'systemctl show "$SERVICE" -p ExecStart --value' in text
     assert "/v1/work-items?tenant_id=smoke-prod" in text
     assert "Origin: https://evil.example" in text
@@ -73,7 +73,7 @@ def test_vds_deploy_defaults_match_measured_production_contract() -> None:
     text = SCRIPT.read_text(encoding="utf-8")
     runbook = Path("docs/PRODUCTION_VDS_DEPLOYMENT.md").read_text(encoding="utf-8")
 
-    assert 'ENV_FILE="/etc/work-intelligence-webhook.secret"' in text
+    assert 'ENV_FILE="/etc/aftergraph/work-intelligence.env"' in text
     assert 'LOCAL_API="http://172.17.0.1:8090"' in text
     assert "/var/lib/work-intelligence/wi.db" in runbook
     assert "172.17.0.1:8090" in runbook
