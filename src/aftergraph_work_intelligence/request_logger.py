@@ -7,6 +7,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TextIO
 
 
 class RequestLogger:
@@ -18,7 +19,7 @@ class RequestLogger:
         self.max_size_mb = max_size_mb
         self.retention_days = retention_days
         self._lock = threading.Lock()
-        self._current_file = None
+        self._current_file: TextIO | None = None
         self._current_size = 0
         self._rotate_log()
 
@@ -34,7 +35,8 @@ class RequestLogger:
     def _check_rotate(self) -> None:
         """Check if we need to rotate the log file."""
         if self._current_size >= self.max_size_mb * 1024 * 1024:
-            self._current_file.close()
+            if self._current_file is not None:
+                self._current_file.close()
             self._rotate_log()
 
     def log_request(
@@ -68,8 +70,12 @@ class RequestLogger:
 
         with self._lock:
             try:
-                self._current_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                self._current_file.flush()
+                if self._current_file is None:
+                    self._rotate_log()
+                log_file = self._current_file
+                assert log_file is not None
+                log_file.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                log_file.flush()
                 self._current_size += len(json.dumps(entry))
                 self._check_rotate()
             except Exception:

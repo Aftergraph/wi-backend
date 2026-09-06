@@ -32,6 +32,11 @@ jobs:
           pip install ruff
           ruff check src/ tests/
 
+      - name: Type-check
+        run: |
+          pip install mypy
+          mypy src/aftergraph_work_intelligence/ --ignore-missing-imports
+
       - name: Test
         run: |
           pytest --tb=short -q

@@ -585,7 +585,7 @@ Production-grade observation → WorkItem inference engine.
         return response
     
     # Add usage tracking
-    usage_stats = {"requests": 0, "by_path": defaultdict(int), "by_status": defaultdict(int), "errors": 0}
+    usage_stats: dict[str, Any] = {"requests": 0, "by_path": defaultdict(int), "by_status": defaultdict(int), "errors": 0}
     app.state.usage_stats = usage_stats
     app.state.rate_limiter = rate_limiter
 
@@ -1152,10 +1152,10 @@ Production-grade observation → WorkItem inference engine.
 
     @router.get("/search", dependencies=[Depends(auth)])
     def search_work_items(
+        request: Request,
         q: str = Query(min_length=1, max_length=256),
         tenant_id: str = Query(min_length=1, max_length=128),
         limit: int = Query(default=50, ge=1, le=500),
-        request: Request = None,
     ):
         """Search work items by title or summary."""
         svc: WorkIntelligenceService = request.app.state.service
@@ -1174,10 +1174,10 @@ Production-grade observation → WorkItem inference engine.
 
     @router.get("/observations", dependencies=[Depends(auth)])
     def list_observations(
+        request: Request,
         tenant_id: str = Query(min_length=1, max_length=128),
         source: str | None = Query(default=None, max_length=64),
         limit: int = Query(default=100, ge=1, le=1000),
-        request: Request = None,
     ):
         """List observations for a tenant, with optional source filtering."""
         store: SQLiteStore = request.app.state.store
@@ -1210,11 +1210,11 @@ Production-grade observation → WorkItem inference engine.
 
     @router.get("/work-items", dependencies=[Depends(auth)])
     def list_work_items(
+        request: Request,
         tenant_id: str = Query(min_length=1, max_length=128),
         status: str | None = Query(default=None, max_length=64),
         priority: str | None = Query(default=None, max_length=64),
         limit: int = Query(default=100, ge=1, le=1000),
-        request: Request = None,
         svc: WorkIntelligenceService = Depends(service),
     ):
         """List work items with optional status and priority filtering (review queue)."""
@@ -1371,9 +1371,9 @@ Production-grade observation → WorkItem inference engine.
 
     @router.get("/work-items/{work_item_id}/actions", dependencies=[Depends(auth)])
     def get_allowed_actions(
+        request: Request,
         work_item_id: str,
         tenant_id: str = Query(min_length=1, max_length=128),
-        request: Request = None,
     ):
         """Get capabilities/allowed-actions for a work item."""
         store: SQLiteStore = request.app.state.store

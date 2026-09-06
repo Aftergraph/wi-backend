@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -41,6 +42,7 @@ def setup_tracing(app: FastAPI) -> None:
         provider = TracerProvider(resource=resource)
 
         # Add exporter
+        exporter: Any
         if exporter_type == "otlp":
             from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
                 OTLPSpanExporter,

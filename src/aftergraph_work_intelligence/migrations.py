@@ -19,7 +19,8 @@ class MigrationManager:
         self._ensure_migrations_table()
 
     def _ensure_migrations_table(self) -> None:
-        conn = self._conn or sqlite3.connect(self.db_path)
+        assert self.db_path is not None or self._conn is not None, "migrations need a db_path or connection"
+        conn = self._conn or sqlite3.connect(Path(str(self.db_path)))
         conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_migrations (
                 version INTEGER PRIMARY KEY,
@@ -32,7 +33,7 @@ class MigrationManager:
             conn.close()
 
     def get_current_version(self) -> int:
-        conn = self._conn or sqlite3.connect(self.db_path)
+        conn = self._conn or sqlite3.connect(Path(str(self.db_path)))
         row = conn.execute(
             "SELECT MAX(version) FROM schema_migrations"
         ).fetchone()
@@ -41,7 +42,7 @@ class MigrationManager:
         return row[0] if row[0] is not None else 0
 
     def get_applied_migrations(self) -> list[dict]:
-        conn = self._conn or sqlite3.connect(self.db_path)
+        conn = self._conn or sqlite3.connect(Path(str(self.db_path)))
         rows = conn.execute(
             "SELECT version, name, applied_at FROM schema_migrations ORDER BY version"
         ).fetchall()
@@ -56,7 +57,7 @@ class MigrationManager:
             logger.debug(f"Migration {version} ({name}) already applied")
             return False
 
-        conn = self._conn or sqlite3.connect(self.db_path)
+        conn = self._conn or sqlite3.connect(Path(str(self.db_path)))
         try:
             for statement in sql.split(";"):
                 statement = statement.strip()
@@ -78,7 +79,7 @@ class MigrationManager:
 
     def rollback_migration(self, version: int, rollback_sql: str) -> bool:
         """Rollback a migration."""
-        with sqlite3.connect(self.db_path) as conn:
+        with sqlite3.connect(Path(str(self.db_path))) as conn:
             current = conn.execute(
                 "SELECT MAX(version) FROM schema_migrations"
             ).fetchone()[0]

@@ -20,8 +20,10 @@ from typing import Any, ClassVar
 from .models import ObservationInput
 
 
-def _parse_iso(value: str) -> datetime:
-    """Parse an ISO-8601 string into an aware datetime in UTC."""
+def _parse_iso(value: str | None) -> datetime | None:
+    """Parse an ISO-8601 string into an aware datetime in UTC, or None if absent."""
+    if not value:
+        return None
     if value.endswith("Z"):
         value = value[:-1] + "+00:00"
     dt = datetime.fromisoformat(value)
@@ -600,7 +602,7 @@ class RenosAdapter(SourceAdapter):
             return
         company_id = payload.get("company_id")
         as_of_str = payload.get("as_of")
-        as_of = _parse_iso(as_of_str) if as_of_str else datetime.now(UTC)
+        as_of = _parse_iso(as_of_str) or datetime.now(UTC)
         for job in payload.get("jobs") or []:
             status = (job.get("status") or "").lower()
             scheduled_end = job.get("scheduled_end")
@@ -610,6 +612,8 @@ class RenosAdapter(SourceAdapter):
             if not scheduled_end or not job_id:
                 continue
             scheduled_end_dt = _parse_iso(scheduled_end)
+            if scheduled_end_dt is None:
+                raise ValueError(f"unparseable scheduled_end: {scheduled_end!r}")
             if status not in self._DONE_STATUSES and scheduled_end_dt < as_of:
                 # Overdue
                 priority = "high" if (as_of - scheduled_end_dt).total_seconds() >= 0 else "medium"

@@ -111,7 +111,8 @@ class WebhookPublisher(Publisher):
             digest = hmac.new(self.secret, body, hashlib.sha256).hexdigest()
             headers["X-Aftergraph-Signature"] = f"sha256={digest}"
         _, parsed = _http_post_json(url, payload, headers, self.timeout_s)
-        external_id = parsed.get("id") or parsed.get("external_id") or parsed.get("ticket_id")
+        parsed_dict = parsed if isinstance(parsed, dict) else {}
+        external_id = parsed_dict.get("id") or parsed_dict.get("external_id") or parsed_dict.get("ticket_id")
         return PublishReceipt(destination=destination, external_id=str(external_id) if external_id is not None else None, response=parsed if isinstance(parsed, dict) else {"body": parsed})
 
 
