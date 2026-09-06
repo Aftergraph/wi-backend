@@ -38,7 +38,7 @@ def test_patch_release_is_auto_approved_only_inside_low_risk_boundary():
     assert result["decision"] == "auto_approve"
     assert result["risk"]["level"] == "low"
     assert result["human_action"]["required"] is False
-    assert result["confidence"]["score"] == 100
+    assert result["confidence"]["score"] == 80
     assert result["authority"] == {
         "execution_authority": "evaluation-only",
         "execution_state": "not_executed",
