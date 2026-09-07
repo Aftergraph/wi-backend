@@ -6,6 +6,9 @@ SERVICE="work-intelligence"
 ENV_FILE="/etc/aftergraph/work-intelligence.env"
 UNIT_SOURCE="deploy/systemd/work-intelligence-vds.service"
 UNIT_DEST="/etc/systemd/system/${SERVICE}.service"
+DRIFT_SCRIPT="scripts/check-production-drift.py"
+DRIFT_POLICY="ops/production-runtime-policy.json"
+DRIFT_MODULE="src/aftergraph_work_intelligence/production_drift.py"
 LOCAL_API="http://172.17.0.1:8090"
 LOCAL_FRONTEND="http://127.0.0.1:3001"
 PUBLIC_API="https://intel.rendetalje.dk"
@@ -132,6 +135,9 @@ REMOTE_SHA="$(git_repo rev-parse origin/main)"
 [[ "$REMOTE_SHA" == "$TARGET_SHA" ]] || fail "requested SHA is not the current origin/main exact head ($REMOTE_SHA)"
 git_repo cat-file -e "${TARGET_SHA}^{commit}" || fail "requested SHA is not available in the deployment checkout"
 git_repo cat-file -e "${TARGET_SHA}:${UNIT_SOURCE}" || fail "canonical VDS systemd unit is missing from requested target SHA"
+git_repo cat-file -e "${TARGET_SHA}:${DRIFT_SCRIPT}" || fail "production drift checker is missing from requested target SHA"
+git_repo cat-file -e "${TARGET_SHA}:${DRIFT_POLICY}" || fail "production runtime policy is missing from requested target SHA"
+git_repo cat-file -e "${TARGET_SHA}:${DRIFT_MODULE}" || fail "production drift module is missing from requested target SHA"
 
 DB_PATH="$(root python3 - "$ENV_FILE" <<'PY'
 from __future__ import annotations
@@ -195,6 +201,36 @@ CURRENT_DROPINS="$(root systemctl show "$SERVICE" -p DropInPaths --value 2>/dev/
 grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$CURRENT_EXEC" \
   || fail "current systemd service bypasses the secure production entrypoint"
 [[ -z "$CURRENT_DROPINS" ]] || fail "production service has unexpected systemd drop-ins: $CURRENT_DROPINS"
+
+DRIFT_TMP="$(mktemp -d)"
+mkdir -p "$DRIFT_TMP/scripts" "$DRIFT_TMP/ops" "$DRIFT_TMP/src/aftergraph_work_intelligence"
+git_repo show "$TARGET_SHA:$DRIFT_SCRIPT" >"$DRIFT_TMP/$DRIFT_SCRIPT"
+git_repo show "$TARGET_SHA:$DRIFT_POLICY" >"$DRIFT_TMP/$DRIFT_POLICY"
+git_repo show "$TARGET_SHA:$DRIFT_MODULE" >"$DRIFT_TMP/$DRIFT_MODULE"
+if root env PYTHONPATH="$DRIFT_TMP/src" python3 "$DRIFT_TMP/$DRIFT_SCRIPT" \
+  --repo-dir "$REPO_DIR" --policy "$DRIFT_TMP/$DRIFT_POLICY" >"$DRIFT_TMP/evidence.json"; then
+  DRIFT_RC=0
+else
+  DRIFT_RC=$?
+fi
+if ((DRIFT_RC != 0)); then
+  python3 - "$DRIFT_TMP/evidence.json" <<'PYDRIFT' >&2
+import json
+import sys
+
+try:
+    evidence = json.load(open(sys.argv[1], encoding="utf-8"))
+except Exception:
+    print("production_drift=FAIL evidence_unreadable")
+else:
+    failed = [c.get("id", "unknown") for c in evidence.get("checks", []) if not c.get("ok")]
+    print("production_drift=FAIL checks=" + ",".join(failed))
+PYDRIFT
+  rm -rf "$DRIFT_TMP"
+  fail "production drift check failed"
+fi
+rm -rf "$DRIFT_TMP"
+printf 'production_drift=PASS\n'
 
 printf 'preflight_target=%s\n' "$TARGET_SHA"
 printf 'preflight_origin_main=%s\n' "$REMOTE_SHA"

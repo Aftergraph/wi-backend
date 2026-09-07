@@ -1,0 +1,26 @@
+{
+  "schema_version": "aftergraph.production-runtime-policy/1.0",
+  "backend": {
+    "service": "work-intelligence",
+    "user": "work-intelligence",
+    "group": "work-intelligence",
+    "environment_file": "/etc/aftergraph/work-intelligence.env",
+    "listener": "172.17.0.1:8090",
+    "canonical_origin": "http://172.17.0.1:8090",
+    "allow_dropins": false
+  },
+  "frontend": {
+    "service": "work-intelligence-web",
+    "user": "work-intelligence-web",
+    "group": "work-intelligence-web",
+    "environment_file": "/etc/aftergraph/work-intelligence-web.env",
+    "listener": "0.0.0.0:3001",
+    "allow_dropins": false
+  },
+  "cloudflared": {
+    "canonical_container": "renos-control-tunnel-1",
+    "required_networks": ["renos-control-edge", "renos-control-internal"],
+    "allow_quick_tunnels": false
+  },
+  "checkout": {"require_clean": true}
+}
