@@ -13,7 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .api import any_tenant_webhook_secrets
+from .api import EVALUATOR_PATH, any_tenant_webhook_secrets
 from .api import create_app as create_core_app
 from .policy import PolicyStore
 from .publishers import Publisher
@@ -144,9 +144,13 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
         # Per-tenant secrets resolve at the handler (claimed tenant is only
         # known after body parsing). Defer — the endpoint verifies or 401s.
         # ponytail: same deferred-verification shape ADR-008 already accepts.
+        # Path-gated like api.auth: only the evaluator verifies, so any other
+        # path with a junk header must fail here instead of deferring.
         if any_tenant_webhook_secrets():
-            request.state.webhook_tenant_deferred = True
-            return True
+            if request.url.path == EVALUATOR_PATH:
+                request.state.webhook_tenant_deferred = True
+                return True
+            return False
         return False
 
     def _apply_cors(self, response: Response, origin: str | None) -> None:
