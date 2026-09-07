@@ -417,37 +417,42 @@ def _persist_autonomy_decision(
     risk = evaluation.get("risk", {})
     confidence = evaluation.get("confidence", {})
     human = evaluation.get("human_action", {})
+    # ponytail: the store's single connection is shared across request threads;
+    # without the lock, concurrent evaluations hit SQLITE_BUSY and the except
+    # below swallows the row — silent audit loss. Serialize here like the
+    # api-key path does.
     try:
-        store._db.execute(
-            """
-            INSERT INTO autonomy_decisions (
-                request_id, tenant_id, repository, ref, head_sha, event_key,
-                capability, decision, risk_level, confidence_score,
-                human_required, approval_type, blast_radius_json,
-                blockers_json, evaluated_at, payload_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                evaluation.get("request_id", payload.request_id),
-                subject.get("tenant_id", payload.tenant_id),
-                subject.get("repository", payload.repository),
-                subject.get("ref", payload.ref),
-                subject.get("head_sha", payload.head_sha),
-                subject.get("event_key", payload.event_key),
-                evaluation.get("capability", payload.capability),
-                evaluation.get("decision", ""),
-                risk.get("level", ""),
-                int(confidence.get("score", 0)),
-                1 if human.get("required") else 0,
-                human.get("approval_type", "none"),
-                _json.dumps(evaluation.get("blast_radius", {})),
-                _json.dumps(evaluation.get("blockers", [])),
-                subject.get("evaluated_at")
-                or evaluation.get("evaluated_at", ""),
-                _json.dumps(payload.model_dump()),
-            ),
-        )
-        store._db.commit()
+        with store._lock:
+            store._db.execute(
+                """
+                INSERT INTO autonomy_decisions (
+                    request_id, tenant_id, repository, ref, head_sha, event_key,
+                    capability, decision, risk_level, confidence_score,
+                    human_required, approval_type, blast_radius_json,
+                    blockers_json, evaluated_at, payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evaluation.get("request_id", payload.request_id),
+                    subject.get("tenant_id", payload.tenant_id),
+                    subject.get("repository", payload.repository),
+                    subject.get("ref", payload.ref),
+                    subject.get("head_sha", payload.head_sha),
+                    subject.get("event_key", payload.event_key),
+                    evaluation.get("capability", payload.capability),
+                    evaluation.get("decision", ""),
+                    risk.get("level", ""),
+                    int(confidence.get("score", 0)),
+                    1 if human.get("required") else 0,
+                    human.get("approval_type", "none"),
+                    _json.dumps(evaluation.get("blast_radius", {})),
+                    _json.dumps(evaluation.get("blockers", [])),
+                    subject.get("evaluated_at")
+                    or evaluation.get("evaluated_at", ""),
+                    _json.dumps(payload.model_dump()),
+                ),
+            )
+            store._db.commit()
     except Exception:  # pragma: no cover - audit must never break evaluation
         store._db.rollback()
 
