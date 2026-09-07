@@ -67,11 +67,18 @@
 3. **Extractor** normalizes the raw signal
 4. **Inferencer** predicts intent, priority, confidence
 5. **Canonicalizer** dedups via SHA-256 token key → creates or merges a `WorkItem`
-6. **State machine** moves item `OPEN → REVIEW → APPROVED → PUBLISHED` with human gate
+6. **State machine** moves items `OPEN → APPROVED | REJECTED | SNOOZED | CANCELLED`,
+   `APPROVED → PUBLISHED | PROMOTED_TO_WORKS | CANCELLED`,
+   `SNOOZED → OPEN (explicit resume) | CANCELLED`, with human gate
+   (`CANCELLED`/`REJECTED` terminal; every edge audited in `intake_transitions`)
 7. **Evidence bundle** (HMAC-SHA256 chain) is built on demand
 8. **Webhooks** fire `observation.ingested` / `work_item.*` events to registered endpoints
 9. **WebSocket** streams the same events to live UI clients
 10. **Audit log** records every mutation (sealed, queryable)
+11. **Background tasks** (`POST /v1/tasks/submit`, worker pool of 4): generic
+    job API with stub executors — not on the critical ingestion path; queue
+    stats are thread-safe, retries are immediate (max 3), state is in-memory
+    only and does not survive restarts
 
 ## Frontend ↔ Backend
 
