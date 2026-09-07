@@ -47,7 +47,7 @@ from .metrics import MetricsRecorder
 from .migrations import run_migrations
 from .models import ObservationInput, Publication, utc_now
 from .policy import PolicyStore, TenantPolicy
-from .publishers import Publisher, publisher_from_env
+from .publishers import Publisher, PublishRouter, WorksPublisher, publisher_from_env
 from .request_logger import RequestLogger
 from .service import WorkIntelligenceService
 from .store import SQLiteStore
@@ -1294,6 +1294,50 @@ Production-grade observation → WorkItem inference engine.
             "work_item_id": work_item_id,
             "publications": jsonable_encoder([asdict(p) for p in publications]),
             "count": len(publications),
+        }
+
+    @router.get("/work-items/{work_item_id}/execution-status", dependencies=[Depends(auth)])
+    def get_execution_status(
+        work_item_id: str,
+        request: Request,
+        tenant_id: str = Query(min_length=1, max_length=128),
+    ):
+        """Get live execution status for a work item published to works-execution.
+
+        Read-only and advisory: resolves the latest ``works`` publication and
+        polls ``GET /v1/works/{id}``. Never mutates local state.
+        """
+        store: SQLiteStore = request.app.state.store
+        item = store.get_work_item(work_item_id, tenant_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="work item not found")
+        publications = store.publications_for_work_item(work_item_id)
+        works_pubs = [p for p in publications if p.destination == "works" and p.external_id]
+        if not works_pubs:
+            raise HTTPException(status_code=404, detail="work item not published to works")
+        pub: Publisher | None = request.app.state.publisher
+        works_pub: WorksPublisher | None = None
+        if isinstance(pub, PublishRouter):
+            candidate = pub._destinations.get("works")
+            if isinstance(candidate, WorksPublisher):
+                works_pub = candidate
+        elif isinstance(pub, WorksPublisher):
+            works_pub = pub
+        if works_pub is None:
+            raise HTTPException(status_code=503, detail="works destination not configured")
+        latest = works_pubs[-1]
+        try:
+            status_payload = works_pub.get_work_status(latest.external_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        return {
+            "work_item_id": work_item_id,
+            "destination": "works",
+            "external_id": latest.external_id,
+            "publication_id": latest.id,
+            "status": status_payload,
         }
 
     @router.get("/search", dependencies=[Depends(auth)])
