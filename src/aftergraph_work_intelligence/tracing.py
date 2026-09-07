@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -62,6 +65,6 @@ def setup_tracing(app: FastAPI) -> None:
         FastAPIInstrumentor.instrument_app(app)
 
     except ImportError:
-        pass  # OpenTelemetry not installed
-    except Exception:
-        pass  # Graceful failure
+        logger.warning("OTel enabled but opentelemetry packages not installed; tracing disabled")
+    except Exception as exc:
+        logger.warning("OTel setup failed, tracing disabled: %s", exc)

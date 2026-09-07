@@ -35,6 +35,7 @@ from aftergraph_work_intelligence.models import (
 )
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.publishers import (
+    Publisher,
     PublishRouter,
     RenosPublisher,
     WebhookPublisher,
@@ -320,3 +321,20 @@ def test_publish_router_dispatches_by_destination_and_enforces_tenant_policy():
     finally:
         server.should_exit = True
         thread.join(timeout=2)
+
+# ---------------- base-class contract ----------------
+
+
+def test_publisher_base_raises_not_implemented():
+    """The base Publisher is abstract-by-contract: publish() must raise."""
+    with pytest.raises(NotImplementedError):
+        Publisher().publish("works", None, [])
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [WebhookPublisher, RenosPublisher, WorksPublisher, PublishRouter],
+)
+def test_concrete_publishers_override_publish(cls):
+    """Every concrete publisher must implement publish() itself."""
+    assert "publish" in cls.__dict__, f"{cls.__name__} does not override Publisher.publish"
