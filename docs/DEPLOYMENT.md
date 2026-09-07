@@ -95,6 +95,21 @@ It resolves to `aftergraph_work_intelligence.secure_api:main` and wraps the core
 
 Do **not** expose `python -m aftergraph_work_intelligence.api` directly to the public network.
 
+### Release Flow (merge queue + drift gate)
+
+Direct pushes to `main` are rejected by the `merge-queue-main` ruleset (no
+bypass actors). Every change lands via PR through the queue (ALLGREEN,
+squash): CI matrix, CodeQL, Scorecard and the production container smoke
+must all pass — human review is async oversight, not a blocking gate
+(single-operator model; see governance decision 2026-09-07).
+
+Production deploys run `scripts/deploy-production-vds.sh --sha <exact-SHA>`
+(target must equal `origin/main` head). Before touching the service, the
+deploy executes the drift gate (`production_drift.py` vs
+`ops/production-runtime-policy.json`): systemd identity, listeners,
+canonical tunnel container, checkout cleanliness and expected SHA. Any drift
+fails the deploy closed with named checks — fix the drift, never the gate.
+
 ### 1. Environment Variables
 
 Store production secrets in a root-owned environment file such as `/etc/aftergraph/work-intelligence.env` rather than embedding them in the unit file.
