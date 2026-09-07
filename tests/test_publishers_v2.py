@@ -35,8 +35,8 @@ from aftergraph_work_intelligence.models import (
 )
 from aftergraph_work_intelligence.policy import PolicyStore, TenantPolicy
 from aftergraph_work_intelligence.publishers import (
-    PublishRouter,
     Publisher,
+    PublishRouter,
     RenosPublisher,
     WebhookPublisher,
     WorksPublisher,
