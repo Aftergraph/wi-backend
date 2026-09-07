@@ -83,7 +83,7 @@ class TaskQueue:
                 task.status = TaskStatus.FAILED
                 task.error = f"No function registered for '{task.name}'"
                 task.completed_at = time.time()
-            self._stats["failed"] += 1
+                self._stats["failed"] += 1
             return
 
         try:
@@ -92,7 +92,7 @@ class TaskQueue:
                 task.status = TaskStatus.COMPLETED
                 task.result = result
                 task.completed_at = time.time()
-            self._stats["completed"] += 1
+                self._stats["completed"] += 1
             logger.info(f"Task {task.name} ({task.id[:8]}) completed")
         except Exception as e:
             with self._lock:
@@ -119,13 +119,14 @@ class TaskQueue:
         with self._lock:
             self._tasks[task.id] = task
             self._queue.append(task.id)
-        self._stats["submitted"] += 1
+            self._stats["submitted"] += 1
         logger.info(f"Task {name} ({task.id[:8]}) submitted")
         return task
 
     def get_task(self, task_id: str) -> Task | None:
         """Get task status."""
-        return self._tasks.get(task_id)
+        with self._lock:
+            return self._tasks.get(task_id)
 
     def list_tasks(self, status: TaskStatus | None = None) -> list[Task]:
         """List tasks, optionally filtered by status."""
