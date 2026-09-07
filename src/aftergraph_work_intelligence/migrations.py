@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,6 +63,8 @@ class MigrationManager:
             for statement in sql.split(";"):
                 statement = statement.strip()
                 if statement:
+                    if self._add_column_already_present(conn, version, name, statement):
+                        continue
                     try:
                         conn.execute(statement)
                     except sqlite3.OperationalError as e:
@@ -76,6 +79,28 @@ class MigrationManager:
                 conn.close()
         logger.info(f"Applied migration {version}: {name}")
         return True
+
+    @staticmethod
+    def _add_column_already_present(conn: sqlite3.Connection, version: int, name: str, statement: str) -> bool:
+        """Skip ALTER TABLE ADD COLUMN when the column already exists.
+
+        SQLite has no ADD COLUMN IF NOT EXISTS, so without this guard every
+        fresh database (whose base schema already carries the column) logs a
+        warning for a no-op — noise that hides real failures. Returns True
+        when the statement was skipped.
+        """
+        match = re.match(r"(?i)ALTER\s+TABLE\s+(\S+)\s+ADD\s+COLUMN\s+(\S+)", statement)
+        if not match:
+            return False
+        table, column = match.group(1), match.group(2).strip('"[]`')
+        try:
+            existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+        except sqlite3.OperationalError:
+            return False
+        if column in existing:
+            logger.debug(f"Migration {version} ({name}) column {table}.{column} already present, skipping")
+            return True
+        return False
 
     def rollback_migration(self, version: int, rollback_sql: str) -> bool:
         """Rollback a migration."""
@@ -122,10 +147,13 @@ MIGRATIONS = [
     (
         2,
         "add_work_item_priority_index",
-        """
-        CREATE INDEX IF NOT EXISTS idx_work_items_priority
-        ON work_items(priority);
-        """,
+        # Proven 2026-09-07: the original statement referenced `work_items`,
+        # a table that never existed in any schema (the table is
+        # `intake_work_items`, and nothing queries by priority). It failed on
+        # 100% of databases without ever taking effect, so it is retired to a
+        # no-op instead of warning forever. Do NOT re-add the index without a
+        # consuming query — that needs a new migration version.
+        """SELECT 1;""",
     ),
     (
         3,
