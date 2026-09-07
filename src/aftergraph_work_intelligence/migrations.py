@@ -11,6 +11,10 @@ from pathlib import Path
 logger = logging.getLogger("aftergraph.work-intelligence.migrations")
 
 
+class MigrationError(Exception):
+    """Deterministic migration failure: version NOT recorded, run must stop."""
+
+
 class MigrationManager:
     """Simple migration manager for SQLite."""
 
@@ -52,28 +56,43 @@ class MigrationManager:
         return [{"version": r[0], "name": r[1], "applied_at": r[2]} for r in rows]
 
     def apply_migration(self, version: int, name: str, sql: str) -> bool:
-        """Apply a migration if not already applied."""
+        """Apply a migration atomically: all statements + version record commit together.
+
+        Returns True when applied, False when already applied (skip).
+        Raises MigrationError on any statement failure: the whole migration
+        rolls back and the version is never recorded (issue #26 — no more
+        false success). Callers that must not crash (app boot) go through
+        run_migrations, which converts this into a fail-closed report.
+        """
         current = self.get_current_version()
         if version <= current:
             logger.debug(f"Migration {version} ({name}) already applied")
             return False
 
         conn = self._conn or sqlite3.connect(Path(str(self.db_path)))
+        began_here = not conn.in_transaction
         try:
-            for statement in sql.split(";"):
-                statement = statement.strip()
-                if statement:
-                    if self._add_column_already_present(conn, version, name, statement):
-                        continue
-                    try:
+            if began_here:
+                conn.execute("BEGIN IMMEDIATE")
+            try:
+                for statement in sql.split(";"):
+                    statement = statement.strip()
+                    if statement:
+                        if self._add_column_already_present(conn, version, name, statement):
+                            continue
                         conn.execute(statement)
-                    except sqlite3.OperationalError as e:
-                        logger.warning(f"Migration {version} ({name}) statement failed: {e}")
-            conn.execute(
-                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-                (version, name, datetime.now(UTC).isoformat()),
-            )
-            conn.commit()
+                conn.execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
+                    (version, name, datetime.now(UTC).isoformat()),
+                )
+            except sqlite3.OperationalError as e:
+                if began_here:
+                    conn.execute("ROLLBACK")
+                logger.error(f"Migration {version} ({name}) failed, rolled back: {e}")
+                raise MigrationError(f"migration {version} ({name}) failed: {e}") from e
+            else:
+                if began_here:
+                    conn.execute("COMMIT")
         finally:
             if self._conn is None:
                 conn.close()
@@ -207,16 +226,31 @@ MIGRATIONS = [
 
 
 def run_migrations(db_path: Path | None = None, connection: sqlite3.Connection | None = None) -> dict:
-    """Run all pending migrations. Use connection for in-memory databases."""
+    """Run all pending migrations. Use connection for in-memory databases.
+
+    Fail-closed: the first failing migration stops the run; later versions
+    never build on a half-applied schema. The failure is reported in the
+    result (ok/failed_version) instead of raising, so app boot keeps its
+    current availability semantics — but nothing is ever recorded as
+    applied unless it fully succeeded.
+    """
     manager = MigrationManager(db_path=db_path, connection=connection)
     results = []
+    failed_version: int | None = None
 
     for version, name, sql in MIGRATIONS:
-        applied = manager.apply_migration(version, name, sql)
+        try:
+            applied = manager.apply_migration(version, name, sql)
+        except MigrationError:
+            failed_version = version
+            results.append({"version": version, "name": name, "applied": False, "error": True})
+            break
         results.append({"version": version, "name": name, "applied": applied})
 
     return {
         "current_version": manager.get_current_version(),
         "migrations": results,
         "total_applied": sum(1 for r in results if r["applied"]),
+        "ok": failed_version is None,
+        "failed_version": failed_version,
     }
