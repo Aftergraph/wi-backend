@@ -174,7 +174,7 @@ host = values.get("AFTERGRAPH_HOST", "172.17.0.1")
 port = values.get("AFTERGRAPH_PORT", "8090")
 cors = values.get("AFTERGRAPH_CORS_ORIGINS", "https://work-intelligence.rendetalje.dk")
 
-if cors != "https://work-intelligence.rendetalje.dk":
+if cors != "https://work-intelligence.aftergraph.org,https://work-intelligence.rendetalje.dk":
     raise SystemExit("AFTERGRAPH_CORS_ORIGINS is not the production frontend allowlist")
 if values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db") != "/var/lib/work-intelligence/wi.db":
     raise SystemExit("AFTERGRAPH_DB must be /var/lib/work-intelligence/wi.db")
