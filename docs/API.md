@@ -147,7 +147,7 @@ Promotes a work item to the works-execution queue (transition to `promoted` stat
 
 **Response (200 OK):** The updated work item (state-aware payload).
 
-**Errors:** 404 unknown item, 403 not permitted (e.g. not APPROVED), 400 invalid transition.
+**Errors:** 404 unknown item or other tenant, 403 not permitted (e.g. not APPROVED), 400 invalid transition.
 
 ### Webhooks (outbound)
 
@@ -226,7 +226,14 @@ curl -X POST http://127.0.0.1:8087/v1/api-keys \
 ### Review a work item
 
 ```bash
-curl -X POST "http://127.0.0.1:8087/v1/work-items/wi_xxx/review" \
-  -H "Authorization: Bearer $API_KEY" \
-  -d '{"decision": "approve", "actor": "ops-user"}'
+curl -X POST "http://127.0.0.1:8087/v1/work-items/wi_xxx/review?tenant_id=default" \
+  -H "Authorization: Bearer ***" \
+  -H "Content-Type: application/json" \
+  -d '{"action": "approve", "actor": "ops-user", "reason": "confirmed"}'
+```
+
+Actions: `approve`, `reject`, `snooze` (requires `resume_at`), `cancel`,
+`resume` (SNOOZED back to OPEN; explicit operator action, no clock sweeper).
+Every action requires `tenant_id` and 404s on tenant mismatch — review,
+promote and merge all enforce same-tenant visibility fail-closed.
 ```
