@@ -24,3 +24,17 @@ def test_install_unit_replaces_the_complete_backend_unit() -> None:
     assert 'systemctl show "$SERVICE" -p User --value' in text
     assert 'systemctl show "$SERVICE" -p Group --value' in text
     assert 'systemctl show "$SERVICE" -p EnvironmentFiles --value' in text
+
+
+def test_preflight_runs_target_version_drift_checker_before_passing() -> None:
+    text = SCRIPT.read_text(encoding="utf-8")
+
+    assert 'DRIFT_SCRIPT="scripts/check-production-drift.py"' in text
+    assert 'DRIFT_POLICY="ops/production-runtime-policy.json"' in text
+    assert 'DRIFT_MODULE="src/aftergraph_work_intelligence/production_drift.py"' in text
+    assert 'git_repo show "$TARGET_SHA:$DRIFT_SCRIPT"' in text
+    assert 'git_repo show "$TARGET_SHA:$DRIFT_POLICY"' in text
+    assert 'git_repo show "$TARGET_SHA:$DRIFT_MODULE"' in text
+    assert 'fail "production drift check failed"' in text
+    assert "production_drift=PASS" in text
+    assert text.index("production_drift=PASS") < text.index("if ((PREFLIGHT_ONLY)); then")
