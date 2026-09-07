@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "Aftergraph Work Intelligence",
-    "description": "## Aftergraph Work Intelligence V2\n\nProduction-grade observation \u2192 WorkItem inference engine.\n\n### Authentication\n- **Bearer token**: `Authorization: Bearer <token>` (full admin access)\n- **API key**: `X-API-Key: ak_<key>` (read/write access)\n\n### Key Features\n- **Observation ingestion**: Submit observations from any source\n- **Automatic resolution**: Deduplication and merge across sources\n- **Policy enforcement**: Per-tenant rules for auto-promotion, allowed sources\n- **Review workflow**: OPEN \u2192 APPROVED \u2192 PUBLISHED lifecycle\n- **Evidence chain**: HMAC-SHA256 provenance for every work item\n- **Webhook delivery**: Async with retries and HMAC signatures\n- **Background tasks**: Async processing with worker pool\n\n### Rate Limiting\n- Global: 60 requests/minute (configurable)\n- Per-key: Custom limits via `/v1/rate-limit`\n- Per-endpoint: Custom limits per API endpoint\n",
+    "title": "Wie by Aftergraph",
+    "description": "## Wie by Aftergraph\n\nWork Intelligence Engine. Production-grade observation \u2192 WorkItem inference engine.\n\n### Authentication\n- **Bearer token**: `Authorization: Bearer <token>` (full admin access)\n- **API key**: `X-API-Key: ak_<key>` (read/write access)\n\n### Key Features\n- **Observation ingestion**: Submit observations from any source\n- **Automatic resolution**: Deduplication and merge across sources\n- **Policy enforcement**: Per-tenant rules for auto-promotion, allowed sources\n- **Review workflow**: OPEN \u2192 APPROVED \u2192 PUBLISHED lifecycle\n- **Evidence chain**: HMAC-SHA256 provenance for every work item\n- **Webhook delivery**: Async with retries and HMAC signatures\n- **Background tasks**: Async processing with worker pool\n\n### Rate Limiting\n- Global: 60 requests/minute (configurable)\n- Per-key: Custom limits via `/v1/rate-limit`\n- Per-endpoint: Custom limits per API endpoint\n",
     "version": "0.2.0"
   },
   "paths": {

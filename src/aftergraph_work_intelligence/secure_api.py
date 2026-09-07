@@ -259,7 +259,7 @@ def create_app(
 
 def main() -> None:
     """Run the fail-closed production application."""
-    parser = argparse.ArgumentParser(description="Aftergraph Work Intelligence V2 (secure)")
+    parser = argparse.ArgumentParser(description="Wie by Aftergraph (secure)")
     parser.add_argument("--host", default=os.getenv("AFTERGRAPH_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087")))
     parser.add_argument("--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db"))

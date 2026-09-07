@@ -1,4 +1,4 @@
-# Aftergraph Work Intelligence V2 — Examples
+# Wie by Aftergraph — Examples
 
 ## Quick Examples
 
