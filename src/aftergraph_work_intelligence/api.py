@@ -793,6 +793,7 @@ Production-grade observation → WorkItem inference engine.
         # Bearer token (master token)
         if configured_token and authorization == f"Bearer {configured_token}":
             request.state.auth_method = "bearer"
+            request.state.auth_identity = "bearer"
             request.state.auth_scopes = ["admin", "read", "write", "delete"]
             return
 
@@ -804,7 +805,7 @@ Production-grade observation → WorkItem inference engine.
             try:
                 with store._lock:
                     row = store._db.execute(
-                        "SELECT key_hash, active FROM api_keys WHERE prefix = ?",
+                        "SELECT id, key_hash, active FROM api_keys WHERE prefix = ?",
                         (prefix,),
                     ).fetchone()
                     valid = bool(
@@ -816,6 +817,7 @@ Production-grade observation → WorkItem inference engine.
                 valid = False
             if valid:
                 request.state.auth_method = "api_key"
+                request.state.auth_identity = f"api_key:{row['id']}"
                 request.state.auth_scopes = ["read", "write"]
                 return
 
@@ -983,6 +985,7 @@ Production-grade observation → WorkItem inference engine.
         def evidence(item: Any, replay: bool) -> dict[str, Any]:
             return {
                 "actor": payload.actor,
+                "authenticated_credential": getattr(request.state, "auth_identity", "unknown"),
                 "tenant_id": tenant_id,
                 "source_work_item_id": work_item_id,
                 "target_work_item_id": payload.target_work_item_id,
@@ -1582,6 +1585,7 @@ Production-grade observation → WorkItem inference engine.
             if not _verify_webhook_signature(body, signature, webhook_secret):
                 raise HTTPException(status_code=401, detail="invalid webhook signature")
             request.state.auth_method = "webhook"
+            request.state.auth_identity = f"webhook:{payload.tenant_id}"
 
         # Per-authentication-method budget for the evaluator (20 req/min default).
         auth_method = getattr(request.state, "auth_method", "unknown")
