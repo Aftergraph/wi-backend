@@ -59,6 +59,11 @@
   Rotation per tenant: `scripts/rotate-webhook-secret.sh [TENANT]`. The
   production middleware defers signature-present requests to the handler when
   the per-tenant namespace is configured; the endpoint still 401s on mismatch.
+  Webhook authentication is path-gated to `/v1/autonomy/decisions/evaluate`
+  (the only endpoint that verifies the signature; `EVALUATOR_PATH`). Before
+  the gate, a junk signature header was accepted as authenticated on every
+  auth-dependent endpoint without verifying anything — proven by exploit test,
+  closed with regression tests in `test_webhook_auth_scope.py`.
 - R2: No per-tenant database isolation; isolation is query-scoped
   (`tenant_id` on every read/write). Isolation maturity: **L1 (enforced query
   scoping)** — every new endpoint must add a tenant-scoping test following
