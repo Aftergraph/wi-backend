@@ -8,6 +8,9 @@ Implements the strict state machine:
     OPEN          --cancel-->    CANCELLED (terminal)
     APPROVED      --publish-->   PUBLISHED
     APPROVED      --promote-->   PROMOTED_TO_WORKS
+    APPROVED      --cancel-->    CANCELLED (terminal)
+    SNOOZED       --resume-->    OPEN      (explicit operator action)
+    SNOOZED       --cancel-->    CANCELLED (terminal)
 
 Every transition is persisted in ``intake_transitions`` and the work-item's
 ``status`` column is updated in the same DB transaction. The audit chain is
@@ -92,6 +95,15 @@ class TransitionEngine:
             resume_at=resume_at,
         )
 
+    def resume(self, work_item_id: str, *, actor: str, reason: str = "") -> Any:
+        # Manual return from SNOOZED to OPEN. The engine already allowed this
+        # edge; only the API wiring was missing. Automatic clock-driven resume
+        # is intentionally NOT built here (explicit audited operator action
+        # covers the path; a sweeper would need schedule/ownership decisions).
+        if not actor:
+            raise ValueError("actor is required for resume")
+        return self._apply(work_item_id, to_state="OPEN", actor=actor, reason=reason)
+
     def publish(self, work_item_id: str, *, actor: str, reason: str = "") -> Any:
         return self._apply(work_item_id, to_state="PUBLISHED", actor=actor, reason=reason)
 
@@ -139,8 +151,8 @@ class TransitionEngine:
             )
         # Allowed transitions:
         # OPEN -> APPROVED | REJECTED | SNOOZED | CANCELLED
-        # APPROVED -> PUBLISHED | PROMOTED_TO_WORKS
-        # SNOOZED -> OPEN (auto-resume; not implemented here, see clock-driven helper)
+        # APPROVED -> PUBLISHED | PROMOTED_TO_WORKS | CANCELLED
+        # SNOOZED -> OPEN (explicit resume) | CANCELLED
         allowed = _allowed_transitions(item.status)
         if to_state not in allowed:
             raise ValueError(
