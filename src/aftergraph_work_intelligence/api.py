@@ -843,6 +843,17 @@ Production-grade observation → WorkItem inference engine.
         if configured_token:
             raise HTTPException(status_code=401, detail="invalid or missing credentials")
 
+    async def require_admin(request: Request) -> None:
+        """Restrict management-plane writes to the bearer master token.
+
+        ponytail: one gate, not one per endpoint. API keys and webhooks
+        carry read+write for the data plane; only bearer administers
+        credentials, policies, limits, webhooks, cache and migrations.
+        Runs after Depends(auth), so auth_method is always set here.
+        """
+        if getattr(request.state, "auth_method", None) != "bearer":
+            raise HTTPException(status_code=403, detail="admin credential required")
+
     def service(request: Request) -> WorkIntelligenceService:
         return request.app.state.service
 
@@ -1183,7 +1194,7 @@ Production-grade observation → WorkItem inference engine.
             return limiter.get_usage(client_id)
         return {"default_limit": limiter.default_limit, "key_count": len(limiter.key_limits)}
 
-    @router.post("/rate-limit", dependencies=[Depends(auth)])
+    @router.post("/rate-limit", dependencies=[Depends(auth), Depends(require_admin)])
     def set_rate_limit(request: Request, key: str = Body(...), limit: int = Body(..., ge=1, le=10000)):
         """Set a custom rate limit for an API key."""
         limiter: RateLimiter = request.app.state.rate_limiter
@@ -1387,7 +1398,7 @@ Production-grade observation → WorkItem inference engine.
             "allow_works": policy.allow_works,
         }
 
-    @router.post("/tenants/{tenant_id}/policy", dependencies=[Depends(auth)])
+    @router.post("/tenants/{tenant_id}/policy", dependencies=[Depends(auth), Depends(require_admin)])
     def update_tenant_policy(
         tenant_id: str,
         request: Request,
@@ -1455,7 +1466,7 @@ Production-grade observation → WorkItem inference engine.
         policies = store.list_tenant_policies()
         return {"policies": policies, "count": len(policies)}
 
-    @router.delete("/tenants/{tenant_id}/policy", dependencies=[Depends(auth)])
+    @router.delete("/tenants/{tenant_id}/policy", dependencies=[Depends(auth), Depends(require_admin)])
     def delete_persisted_policy(tenant_id: str, request: Request):
         """Delete a persisted tenant policy."""
         store: SQLiteStore = request.app.state.store
@@ -1842,7 +1853,7 @@ Production-grade observation → WorkItem inference engine.
             ws_last_heartbeat.pop(id(websocket), None)
 
     # --- Webhook Management ---
-    @router.post("/webhooks", status_code=201, dependencies=[Depends(auth)])
+    @router.post("/webhooks", status_code=201, dependencies=[Depends(auth), Depends(require_admin)])
     def register_webhook(
         request: Request,
         url: str = Body(..., min_length=1),
@@ -1883,7 +1894,7 @@ Production-grade observation → WorkItem inference engine.
             "count": len(webhooks),
         }
 
-    @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(auth)])
+    @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(auth), Depends(require_admin)])
     def delete_webhook(
         webhook_id: str,
         request: Request,
@@ -1896,7 +1907,7 @@ Production-grade observation → WorkItem inference engine.
         return {"status": "deleted", "id": webhook_id}
 
     # --- API Key Management (DB-backed) ---
-    @router.post("/api-keys", status_code=201, dependencies=[Depends(auth)])
+    @router.post("/api-keys", status_code=201, dependencies=[Depends(auth), Depends(require_admin)])
     def create_api_key(
         request: Request,
         name: str = Body(..., min_length=1, max_length=128),
@@ -1934,7 +1945,7 @@ Production-grade observation → WorkItem inference engine.
         keys = store.list_api_keys()
         return {"keys": keys, "count": len(keys)}
 
-    @router.post("/api-keys/{key_id}/rotate", status_code=200, dependencies=[Depends(auth)])
+    @router.post("/api-keys/{key_id}/rotate", status_code=200, dependencies=[Depends(auth), Depends(require_admin)])
     def rotate_api_key(key_id: str, request: Request):
         """Rotate an API key: deactivate old, create new."""
         import hashlib
@@ -1967,7 +1978,7 @@ Production-grade observation → WorkItem inference engine.
             "_warning": "Store this key securely. It will not be shown again.",
         }
 
-    @router.delete("/api-keys/{key_id}", dependencies=[Depends(auth)])
+    @router.delete("/api-keys/{key_id}", dependencies=[Depends(auth), Depends(require_admin)])
     def revoke_api_key(key_id: str, request: Request):
         """Revoke (deactivate) an API key."""
         store: SQLiteStore = request.app.state.store
@@ -2018,14 +2029,14 @@ Production-grade observation → WorkItem inference engine.
         cache: Cache = request.app.state.cache
         return cache.stats()
 
-    @router.post("/cache/clear", dependencies=[Depends(auth)])
+    @router.post("/cache/clear", dependencies=[Depends(auth), Depends(require_admin)])
     def cache_clear(request: Request):
         """Clear all cache entries."""
         cache: Cache = request.app.state.cache
         cleared = cache.clear()
         return {"cleared": cleared, "status": "ok"}
 
-    @router.delete("/cache/{key}", dependencies=[Depends(auth)])
+    @router.delete("/cache/{key}", dependencies=[Depends(auth), Depends(require_admin)])
     def cache_delete(request: Request, key: str):
         """Delete a specific cache entry."""
         cache: Cache = request.app.state.cache
@@ -2041,7 +2052,7 @@ Production-grade observation → WorkItem inference engine.
         version = getattr(request.app.state, "migration_version", 0)
         return {"current_version": version}
 
-    @router.post("/migrations/run", dependencies=[Depends(auth)])
+    @router.post("/migrations/run", dependencies=[Depends(auth), Depends(require_admin)])
     def run_migrations_endpoint(request: Request):
         """Run pending migrations."""
         store: SQLiteStore = request.app.state.store
