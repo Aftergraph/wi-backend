@@ -363,6 +363,12 @@ def any_tenant_webhook_secrets() -> bool:
     return any(key.startswith(_TENANT_WEBHOOK_SECRET_PREFIX) for key in os.environ)
 
 
+#: The only endpoint webhook-HMAC authentication may defer verification for.
+#: Every other endpoint verifies nothing, so accepting the header there would
+#: authenticate any caller holding a junk header value (fail-open).
+EVALUATOR_PATH = "/v1/autonomy/decisions/evaluate"
+
+
 def _verify_webhook_signature(
     request_body: bytes,
     signature_header: str | None,
@@ -813,9 +819,14 @@ Production-grade observation → WorkItem inference engine.
                 request.state.auth_scopes = ["read", "write"]
                 return
 
-        # Webhook HMAC-SHA256 signature — header presence defers verification to endpoint
-        if x_hub_signature_256 and (
-            getattr(request.app.state, "webhook_secret", None) or any_tenant_webhook_secrets()
+        # Webhook HMAC-SHA256 signature — header presence defers verification to endpoint.
+        # ponytail: webhook auth exists ONLY for the read-only evaluator.
+        # No other endpoint verifies the signature, so a junk header here
+        # would authenticate (fail-open). Gate the deferral on the exact path.
+        if (
+            x_hub_signature_256
+            and (getattr(request.app.state, "webhook_secret", None) or any_tenant_webhook_secrets())
+            and request.url.path == EVALUATOR_PATH
         ):
             request.state.auth_method = "webhook_pending"
             request.state.auth_scopes = ["read", "write"]
