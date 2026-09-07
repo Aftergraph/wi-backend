@@ -268,7 +268,7 @@ class PublishRequest(BaseModel):
 
 class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    action: str = Field(pattern="^(approve|reject|snooze|cancel)$")
+    action: str = Field(pattern="^(approve|reject|snooze|cancel|resume)$")
     actor: str = Field(min_length=1, max_length=512)
     reason: str = Field(default="", max_length=2048)
     resume_at: datetime | None = None
@@ -918,9 +918,13 @@ Production-grade observation → WorkItem inference engine.
         payload: ReviewRequest,
         request: Request,
         tenant_id: str = Query(min_length=1, max_length=128),
+        svc: WorkIntelligenceService = Depends(service),
     ):
         engine: TransitionEngine = request.app.state.transitions
         try:
+            # ponytail: tenant check lives here once (merge/promote share the
+            # shape) — the engine is tenant-blind by design, endpoints gate.
+            svc.get_work_item_detail(work_item_id, tenant_id)
             if payload.action == "approve":
                 item = engine.approve(work_item_id, actor=payload.actor, reason=payload.reason)
             elif payload.action == "reject":
@@ -929,6 +933,8 @@ Production-grade observation → WorkItem inference engine.
                 if payload.resume_at is None:
                     raise HTTPException(status_code=400, detail="resume_at is required for snooze")
                 item = engine.snooze(work_item_id, actor=payload.actor, resume_at=payload.resume_at, reason=payload.reason)
+            elif payload.action == "resume":
+                item = engine.resume(work_item_id, actor=payload.actor, reason=payload.reason)
             else:  # cancel
                 item = engine.cancel(work_item_id, actor=payload.actor, reason=payload.reason)
         except KeyError as exc:
@@ -945,9 +951,11 @@ Production-grade observation → WorkItem inference engine.
         payload: PromoteRequest,
         request: Request,
         tenant_id: str = Query(min_length=1, max_length=128),
+        svc: WorkIntelligenceService = Depends(service),
     ):
         engine: TransitionEngine = request.app.state.transitions
         try:
+            svc.get_work_item_detail(work_item_id, tenant_id)
             item = engine.promote_to_works(work_item_id, actor=payload.actor, reason=payload.reason)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
@@ -1514,6 +1522,8 @@ Production-grade observation → WorkItem inference engine.
         actions = []
         if item.status == "OPEN":
             actions = ["approve", "reject", "snooze", "cancel"]
+        elif item.status == "SNOOZED":
+            actions = ["resume", "cancel"]
         elif item.status == "APPROVED":
             actions = ["publish", "promote", "cancel"]
 
