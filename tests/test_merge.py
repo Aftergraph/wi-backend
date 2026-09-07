@@ -155,7 +155,9 @@ def test_merge_idempotency_key_replay_and_reuse_conflict(tmp_path):
 
 def test_migration_v5_adds_idempotency_column(tmp_path):
     from aftergraph_work_intelligence.migrations import run_migrations
+    from aftergraph_work_intelligence.store import SQLiteStore
 
+    SQLiteStore(tmp_path / "mig5.db")  # base schema first — the supported path
     result = run_migrations(db_path=tmp_path / "mig5.db")
     assert result["current_version"] >= 5
     assert any(m["version"] == 5 for m in result["migrations"])

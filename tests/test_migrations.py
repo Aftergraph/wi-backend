@@ -84,16 +84,24 @@ class TestRunMigrations:
     """Test run_migrations function."""
 
     def test_run_migrations(self, tmp_path):
+        from aftergraph_work_intelligence.store import SQLiteStore
+
         db = tmp_path / "test.db"
+        SQLiteStore(db)  # base schema first — the supported path (app lifespan does the same)
         result = run_migrations(db)
         assert result["current_version"] == 5
         assert result["total_applied"] == 5
+        assert result["ok"] is True
 
     def test_run_migrations_idempotent(self, tmp_path):
+        from aftergraph_work_intelligence.store import SQLiteStore
+
         db = tmp_path / "test.db"
+        SQLiteStore(db)
         run_migrations(db)
         result = run_migrations(db)
         assert result["total_applied"] == 0  # Nothing new applied
+        assert result["ok"] is True
 
 
 class TestMigrationAPI:
