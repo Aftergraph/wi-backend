@@ -267,6 +267,16 @@ with sqlite3.connect(f"file:{src_path}?mode=ro", uri=True) as src:
 PY
   root chmod 0640 "$BACKUP_PATH"
   printf 'database_backup=%s\n' "$BACKUP_PATH"
+  # ponytail: creator owns lifecycle — tonight's deploy pace (~10 backups)
+  # proves unbounded growth. Keep newest 10, best-effort, pattern-scoped
+  # so rotation backups and logs are never touched.
+  pruned="$(root find "$BACKUP_DIR" -maxdepth 1 -name 'work-intelligence-*.db' -printf '%T@ %p\n' 2>/dev/null | sort -rn | awk 'NR>10 {print $2}' || true)"
+  if [[ -n "$pruned" ]]; then
+    while IFS= read -r old; do root rm -f "$old" || true; done <<<"$pruned"
+    printf 'backup_prune=kept_newest_10\n'
+  else
+    printf 'backup_prune=none_needed\n'
+  fi
 else
   printf 'database_backup=skipped database_not_present_at=%s\n' "$DB_PATH"
 fi
