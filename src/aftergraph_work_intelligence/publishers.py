@@ -83,6 +83,23 @@ def _http_post_json(url: str, payload: dict[str, Any], headers: Mapping[str, str
         raise RuntimeError(f"{url} failed: {exc.reason}") from exc
 
 
+def _http_get_json(url: str, headers: Mapping[str, str], timeout_s: float) -> tuple[int, dict[str, Any] | str]:
+    request = urllib.request.Request(url, headers=dict(headers), method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            raw = response.read(1024 * 1024).decode("utf-8", errors="replace")
+            content_type = response.headers.get("Content-Type", "")
+            if "json" in content_type and raw:
+                parsed = json.loads(raw)
+                return response.status, parsed if isinstance(parsed, dict) else {"value": parsed}
+            return response.status, {"body": raw}
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read(4096).decode("utf-8", errors="replace")
+        raise RuntimeError(f"{url} returned HTTP {exc.code}: {body_text}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"{url} failed: {exc.reason}") from exc
+
+
 # ---------- WebhookPublisher (V1, carried over) ----------
 
 
@@ -329,6 +346,41 @@ class WorksPublisher(Publisher):
         self._token = token
         external_id = parsed.get("id") if isinstance(parsed, dict) else None
         return PublishReceipt(destination=self.destination, external_id=external_id, response=parsed if isinstance(parsed, dict) else {"body": parsed})
+
+    def get_work_status(self, external_id: str) -> dict[str, Any]:
+        """Fetch live execution status for a published work from works-execution.
+
+        Read-only: GETs ``/v1/works/{id}`` with the enrollment Bearer [REDACTED]
+        re-enrolling once on 401/403 like :meth:`publish`. Accepts ids with or
+        without the ``works:`` display prefix.
+        """
+        work_id = external_id.split(":", 1)[1] if external_id.startswith("works:") else external_id
+        token = self._token or self._enroll()
+        url = f"{self.base_url}/v1/works/{work_id}"
+        headers = {
+            "User-Agent": "aftergraph-work-intelligence/0.2",
+            "Authorization": f"Bearer {token}",
+        }
+        def _fetch(bearer: str) -> tuple[int, dict[str, Any] | str]:
+            headers["Authorization"] = f"Bearer {bearer}"
+            try:
+                return _http_get_json(url, headers, self.timeout_s)
+            except RuntimeError as exc:
+                if "HTTP 404" in str(exc):
+                    raise KeyError(f"work not found in works-execution: {work_id}") from exc
+                raise
+
+        try:
+            status, parsed = _fetch(token)
+        except RuntimeError as exc:
+            if "HTTP 401" not in str(exc) and "HTTP 403" not in str(exc):
+                raise
+            token = self._enroll()
+            status, parsed = _fetch(token)
+        self._token = token
+        if status < 200 or status >= 300:
+            raise RuntimeError(f"works status fetch failed (HTTP {status}): {parsed!r}")
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
 
 
 # ---------- PublishRouter ----------

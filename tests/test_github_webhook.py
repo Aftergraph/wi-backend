@@ -171,9 +171,54 @@ def test_webhook_duplicate_push_is_replayed_not_duplicated(client):
     assert data["observations_created"] == 0
 
 
-def test_webhook_no_secret_configured_accepts(client):
-    # When no secret is configured, webhook accepts without signature
-    pass  # placeholder — implemented in api.py when env is absent
+def test_webhook_no_secret_configured_accepts_unsigned(monkeypatch, tmp_path):
+    # Documented dev-mode behavior: with no secret configured, unsigned
+    # webhooks are accepted. Production always sets the secret (fail-closed
+    # when set: bad/missing signature -> 401, see tests above).
+    monkeypatch.delenv("AFTERGRAPH_GITHUB_WEBHOOK_SECRET", raising=False)
+    app = create_app(db_path=tmp_path / "nosecret.db")
+    with TestClient(app) as unsigned_client:
+        payload = json.dumps(_push_event()).encode()
+        resp = unsigned_client.post(
+            "/v1/webhook/github",
+            content=payload,
+            headers={
+                "X-GitHub-Event": "push",
+                "Content-Type": "application/json",
+            },
+        )
+        assert resp.status_code == 201, resp.text
+
+
+def test_webhook_tampered_body_rejected(client):
+    # Valid signature for body A must not validate body B (integrity, not
+    # just presence of a signature). Replay protection itself comes from
+    # external_id idempotency (see duplicate-push test), not timestamps:
+    # GitHub-style HMAC carries no timestamp to check.
+    payload = json.dumps(_push_event()).encode()
+    tampered = json.dumps({**_push_event(), "after": "evil999"}).encode()
+    resp = client.post(
+        "/v1/webhook/github",
+        content=tampered,
+        headers={
+            "X-GitHub-Event": "push",
+            "X-Hub-Signature-256": _sign(payload),
+            "Content-Type": "application/json",
+        },
+    )
+    assert resp.status_code == 401
+
+
+def test_verify_helper_accepts_raw_hex_and_rejects_garbage():
+    from aftergraph_work_intelligence.api import _verify_webhook_signature
+
+    body = b'{"a":1}'
+    good_hex = hmac.new(WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    assert _verify_webhook_signature(body, "sha256=" + good_hex, WEBHOOK_SECRET) is True
+    assert _verify_webhook_signature(body, good_hex, WEBHOOK_SECRET) is True
+    assert _verify_webhook_signature(body, "not-hex-at-all!!!", WEBHOOK_SECRET) is False
+    assert _verify_webhook_signature(body, "", WEBHOOK_SECRET) is False
+    assert _verify_webhook_signature(body, "sha256=" + good_hex, None) is False
 
 
 def test_webhook_check_run_success_ignored(client):
