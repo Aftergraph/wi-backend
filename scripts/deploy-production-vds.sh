@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_DIR="/opt/work-intelligence"
-SERVICE="work-intelligence"
+REPO_DIR="/opt/wi-backend"
+SERVICE="wi-backend"
 ENV_FILE="/etc/aftergraph/work-intelligence.env"
 UNIT_SOURCE="deploy/systemd/work-intelligence-vds.service"
 UNIT_DEST="/etc/systemd/system/${SERVICE}.service"
@@ -11,8 +11,8 @@ DRIFT_POLICY="ops/production-runtime-policy.json"
 DRIFT_MODULE="src/aftergraph_work_intelligence/production_drift.py"
 LOCAL_API="http://172.17.0.1:8090"
 LOCAL_FRONTEND="http://127.0.0.1:3001"
-PUBLIC_API="https://intel.rendetalje.dk"
-PUBLIC_FRONTEND="https://work-intelligence.rendetalje.dk"
+PUBLIC_API=""
+PUBLIC_FRONTEND="https://wie.aftergraph.org"
 TARGET_SHA=""
 INSTALL_UNIT=0
 PREFLIGHT_ONLY=0
@@ -28,11 +28,11 @@ Options:
   --install-unit       Install the complete canonical VDS systemd unit before restart.
   --preflight-only     Validate host/repo/env/unit prerequisites without changing production.
   --skip-public        Skip the final public-hostname security probe.
-  --repo-dir PATH      Deployment checkout. Default: /opt/work-intelligence
-  --service NAME       systemd service. Default: work-intelligence
+  --repo-dir PATH      Deployment checkout. Default: /opt/wi-backend
+  --service NAME       systemd service. Default: wi-backend
   --env-file PATH      Production environment file. Default: /etc/aftergraph/work-intelligence.env
   --local-api URL      Local API base. Default: http://172.17.0.1:8090
-  --public-api URL     Public API base. Default: https://intel.rendetalje.dk
+  --public-api URL     Direct public backend origin (backend-root paths). Required unless --skip-public is given.
   -h, --help           Show this help.
 
 Bootstrap the script from the verified target commit into /tmp before running
@@ -172,9 +172,9 @@ if missing:
 db_path = values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db")
 host = values.get("AFTERGRAPH_HOST", "172.17.0.1")
 port = values.get("AFTERGRAPH_PORT", "8090")
-cors = values.get("AFTERGRAPH_CORS_ORIGINS", "https://work-intelligence.rendetalje.dk")
+cors = values.get("AFTERGRAPH_CORS_ORIGINS", "https://wie.aftergraph.org")
 
-if cors != "https://work-intelligence.aftergraph.org,https://work-intelligence.rendetalje.dk":
+if cors != "https://wie.aftergraph.org":
     raise SystemExit("AFTERGRAPH_CORS_ORIGINS is not the production frontend allowlist")
 if values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db") != "/var/lib/work-intelligence/wi.db":
     raise SystemExit("AFTERGRAPH_DB must be /var/lib/work-intelligence/wi.db")
@@ -375,6 +375,10 @@ frontend_proxy_code="$(curl -sS --connect-timeout 5 --max-time 15 -o /dev/null -
   "$LOCAL_FRONTEND/api/v1/work-items?tenant_id=smoke-prod")"
 [[ "$frontend_proxy_code" == "200" ]] || fail "local frontend API proxy failed (status=$frontend_proxy_code)"
 printf 'local_frontend_proxy=PASS status=%s\n' "$frontend_proxy_code"
+
+if ((SKIP_PUBLIC == 0)) && [[ -z "$PUBLIC_API" ]]; then
+  fail "public probes need --public-api <direct backend origin> (no default post domain rename)"
+fi
 
 if ((SKIP_PUBLIC == 0)); then
   wait_for_health "$PUBLIC_API" || fail "public health did not become ready"
