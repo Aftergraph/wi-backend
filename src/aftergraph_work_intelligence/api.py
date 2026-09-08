@@ -1326,8 +1326,11 @@ Production-grade observation → WorkItem inference engine.
         if works_pub is None:
             raise HTTPException(status_code=503, detail="works destination not configured")
         latest = works_pubs[-1]
+        latest_external_id = latest.external_id
+        if not latest_external_id:
+            raise HTTPException(status_code=404, detail="work item not published to works")
         try:
-            status_payload = works_pub.get_work_status(latest.external_id)
+            status_payload = works_pub.get_work_status(latest_external_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -1335,7 +1338,7 @@ Production-grade observation → WorkItem inference engine.
         return {
             "work_item_id": work_item_id,
             "destination": "works",
-            "external_id": latest.external_id,
+            "external_id": latest_external_id,
             "publication_id": latest.id,
             "status": status_payload,
         }
