@@ -198,7 +198,7 @@ CURRENT_DROPINS="$(root systemctl show "$SERVICE" -p DropInPaths --value 2>/dev/
 [[ "$CURRENT_USER" == "work-intelligence" ]] || fail "production service user is not work-intelligence"
 [[ "$CURRENT_GROUP" == "work-intelligence" ]] || fail "production service group is not work-intelligence"
 [[ "$CURRENT_ENV" == *"/etc/aftergraph/work-intelligence.env"* ]] || fail "production service does not use the canonical backend env"
-grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$CURRENT_EXEC" \
+grep -Fq "/opt/wi-backend/.venv/bin/aftergraph-work-intelligence" <<<"$CURRENT_EXEC" \
   || fail "current systemd service bypasses the secure production entrypoint"
 [[ -z "$CURRENT_DROPINS" ]] || fail "production service has unexpected systemd drop-ins: $CURRENT_DROPINS"
 
@@ -303,7 +303,7 @@ EFFECTIVE_USER="$(root systemctl show "$SERVICE" -p User --value 2>/dev/null)"
 EFFECTIVE_GROUP="$(root systemctl show "$SERVICE" -p Group --value 2>/dev/null)"
 EFFECTIVE_ENV="$(root systemctl show "$SERVICE" -p EnvironmentFiles --value 2>/dev/null)"
 EFFECTIVE_DROPINS="$(root systemctl show "$SERVICE" -p DropInPaths --value 2>/dev/null)"
-grep -Fq "/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" <<<"$EFFECTIVE_EXEC" \
+grep -Fq "/opt/wi-backend/.venv/bin/aftergraph-work-intelligence" <<<"$EFFECTIVE_EXEC" \
   || fail "effective systemd ExecStart does not use the secure production entrypoint"
 [[ "$EFFECTIVE_USER" == "work-intelligence" ]] || fail "effective systemd user is not work-intelligence"
 [[ "$EFFECTIVE_GROUP" == "work-intelligence" ]] || fail "effective systemd group is not work-intelligence"

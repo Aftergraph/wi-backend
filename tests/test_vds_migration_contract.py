@@ -7,7 +7,7 @@ def test_vds_has_full_canonical_service_unit() -> None:
     assert "User=work-intelligence" in unit
     assert "Group=work-intelligence" in unit
     assert "EnvironmentFile=/etc/aftergraph/work-intelligence.env" in unit
-    assert "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" in unit
+    assert "ExecStart=/opt/wi-backend/.venv/bin/aftergraph-work-intelligence" in unit
     assert "Environment=AFTERGRAPH_DB=/var/lib/work-intelligence/wi.db" in unit
     assert "Environment=AFTERGRAPH_HOST=172.17.0.1" in unit
     assert "Environment=AFTERGRAPH_PORT=8090" in unit
