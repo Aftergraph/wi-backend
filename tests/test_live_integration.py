@@ -190,7 +190,7 @@ class TestLiveRenOSSession:
 
 
 # ---------------------------------------------------------------------------
-# LIVE: Work Intelligence V2 ↔ RenOS cross-repo flow
+# LIVE: Wie ↔ RenOS cross-repo flow
 # ---------------------------------------------------------------------------
 class TestLiveCrossRepoFlow:
     """

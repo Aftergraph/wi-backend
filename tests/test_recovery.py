@@ -1,5 +1,5 @@
 """
-Restart/recovery tests for Work Intelligence V2.
+Restart/recovery tests for Wie.
 
 Proves that the system survives:
 - Process crash and restart (SQLite state survives)
