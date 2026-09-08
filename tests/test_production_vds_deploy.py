@@ -61,12 +61,12 @@ def test_canonical_systemd_unit_uses_secure_entrypoint_and_hardening() -> None:
     assert "User=work-intelligence" in text
     assert "Group=work-intelligence" in text
     assert "EnvironmentFile=/etc/aftergraph/work-intelligence.env" in text
-    assert "ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence" in text
+    assert "ExecStart=/opt/wi-backend/.venv/bin/aftergraph-work-intelligence" in text
     assert "NoNewPrivileges=true" in text
     assert "PrivateTmp=true" in text
     assert "ProtectSystem=strict" in text
     assert "ProtectHome=true" in text
-    assert "ReadWritePaths=/var/lib/work-intelligence /opt/work-intelligence/logs" in text
+    assert "ReadWritePaths=/var/lib/work-intelligence /opt/wi-backend/logs /opt/work-intelligence/logs" in text
 
 
 def test_vds_deploy_defaults_match_measured_production_contract() -> None:
