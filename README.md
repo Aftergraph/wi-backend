@@ -1,17 +1,17 @@
 <!-- aftergraph-brand-os:v1.0.0 -->
 
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Aftergraph/work-intelligence-v2/badge)](https://scorecard.dev/viewer/?uri=github.com/Aftergraph/work-intelligence-v2)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Aftergraph/wi-backend/badge)](https://scorecard.dev/viewer/?uri=github.com/Aftergraph/wi-backend)
 
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset=".github/assets/github/hero.webp">
-    <img src=".github/assets/github/hero.png" alt="Work Intelligence — Source-neutral observation → WorkItem inference" width="100%">
+    <img src=".github/assets/github/hero.png" alt="Wie — Source-neutral observation → WorkItem inference" width="100%">
   </picture>
 </p>
 
-# Aftergraph Work Intelligence V2
+# Wie by Aftergraph
 
-**Production-grade observation → WorkItem inference engine.**
+**Wie — Work Intelligence Engine. Production-grade observation → WorkItem inference engine.**
 
 Source-neutral automatic work detection. Humans keep working in conversation, email, calendars, code, or other systems; adapters send observations here; the engine creates or updates canonical work automatically.
 
@@ -52,7 +52,7 @@ aftergraph_work_intelligence.api --port 8811`, exact HEAD `44def8d` — see
 `.github/assets/screenshots/README.md` for provenance):
 
 <p align="center">
-  <img src=".github/assets/screenshots/01-overview.webp" alt="Work Intelligence dashboard — real running service" width="100%">
+  <img src=".github/assets/screenshots/01-overview.webp" alt="Wie dashboard — real running service" width="100%">
   <br><em>Dashboard</em>
 </p>
 
@@ -67,7 +67,7 @@ aftergraph_work_intelligence.api --port 8811`, exact HEAD `44def8d` — see
 </p>
 
 <p align="center">
-  <img src=".github/assets/screenshots/04-live-state.webp" alt="Work Intelligence dashboard (mobile viewport)" width="100%">
+  <img src=".github/assets/screenshots/04-live-state.webp" alt="Wie dashboard (mobile viewport)" width="100%">
   <br><em>Dashboard — mobile viewport</em>
 </p>
 
@@ -81,7 +81,7 @@ aftergraph_work_intelligence.api --port 8811`, exact HEAD `44def8d` — see
                       │ observations
                       ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                    Aftergraph Work Intelligence                  │
+│                        Wie by Aftergraph                        │
 │                                                                  │
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐       │
 │  │  Adapter     │───▶│  Store       │───▶│  Policy      │       │

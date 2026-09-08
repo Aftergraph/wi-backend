@@ -1,4 +1,4 @@
-# Aftergraph Work Intelligence — Architecture
+# Wie by Aftergraph — Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐

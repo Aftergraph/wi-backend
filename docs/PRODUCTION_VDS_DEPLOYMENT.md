@@ -1,6 +1,6 @@
 # Production VDS Deployment Runbook
 
-This is the exact-SHA promotion path for the Work Intelligence backend behind
+This is the exact-SHA promotion path for the Wie backend behind
 `https://intel.rendetalje.dk` on the measured production host `vmi3517816`.
 
 ## Measured production contract

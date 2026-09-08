@@ -1,12 +1,12 @@
-# Aftergraph Work Intelligence V2 — Deployment Guide
+# Wie by Aftergraph — Deployment Guide
 
 ## Quick Start (Local Development)
 
 ### 1. Clone and Setup
 
 ```bash
-git clone https://github.com/Aftergraph/work-intelligence-v2.git
-cd work-intelligence-v2
+git clone https://github.com/Aftergraph/wi-backend.git
+cd wi-backend
 
 python -m venv .venv
 source .venv/bin/activate  # Linux/macOS
@@ -144,7 +144,7 @@ Create `/etc/systemd/system/work-intelligence.service`:
 
 ```ini
 [Unit]
-Description=Aftergraph Work Intelligence V2
+Description=Wie by Aftergraph
 After=network-online.target
 Wants=network-online.target
 
@@ -380,5 +380,5 @@ Use `python -m aftergraph_work_intelligence.api` only for isolated local develop
 
 ## Support
 
-- GitHub: https://github.com/Aftergraph/work-intelligence-v2
-- Issues: https://github.com/Aftergraph/work-intelligence-v2/issues
+- GitHub: https://github.com/Aftergraph/wi-backend
+- Issues: https://github.com/Aftergraph/wi-backend/issues

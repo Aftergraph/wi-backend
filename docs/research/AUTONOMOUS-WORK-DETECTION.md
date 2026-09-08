@@ -5,7 +5,7 @@
 **Publication Track:** Working Paper / Product Research Protocol  
 **Date:** 5 September 2026  
 **Status:** ENGINEERING QUALIFICATION COMPLETE; 30-DAY FIELD VALIDATION PENDING  
-**Reference Implementation:** Aftergraph Work Intelligence V2  
+**Reference Implementation:** Wie by Aftergraph (V2)  
 **Planned First Field Environment:** RenOS / Rendetalje operational workflows  
 
 ---
