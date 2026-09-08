@@ -172,8 +172,8 @@ def collect_snapshot(
     errors: list[str] = []
     return {
         "collector_errors": errors,
-        "backend": _service_snapshot("work-intelligence", errors),
-        "frontend": _service_snapshot("work-intelligence-web", errors),
+        "backend": _service_snapshot("wi-backend", errors),
+        "frontend": _service_snapshot("wi-frontend", errors),
         "listeners": _listener_snapshot(errors),
         "cloudflared": {
             "processes": _cloudflared_processes(errors),
