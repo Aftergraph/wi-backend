@@ -61,7 +61,7 @@ docker run -d \
   -e AFTERGRAPH_API_TOKEN="$AFTERGRAPH_API_TOKEN" \
   -e AFTERGRAPH_EVIDENCE_SECRET="$AFTERGRAPH_EVIDENCE_SECRET" \
   -e AFTERGRAPH_GITHUB_WEBHOOK_SECRET="$AFTERGRAPH_GITHUB_WEBHOOK_SECRET" \
-  -e AFTERGRAPH_CORS_ORIGINS="https://work-intelligence.rendetalje.dk" \
+  -e AFTERGRAPH_CORS_ORIGINS="https://wie.aftergraph.org" \
   -e AFTERGRAPH_RATE_LIMIT=120 \
   -v work-intelligence-data:/data \
   --name work-intelligence \
@@ -119,7 +119,7 @@ Store production secrets in a root-owned environment file such as `/etc/aftergra
 AFTERGRAPH_API_TOKEN=replace-with-strong-token
 AFTERGRAPH_EVIDENCE_SECRET=replace-with-strong-hmac-secret
 AFTERGRAPH_GITHUB_WEBHOOK_SECRET=replace-with-github-webhook-secret
-AFTERGRAPH_CORS_ORIGINS=https://work-intelligence.rendetalje.dk
+AFTERGRAPH_CORS_ORIGINS=https://wie.aftergraph.org
 
 # Runtime
 AFTERGRAPH_DB=/var/lib/work-intelligence/data.db
@@ -214,8 +214,8 @@ Use TLS at the public edge. The current Aftergraph deployment uses Cloudflare Tu
 
 Measured on `vmi3517816` on 2026-09-06 after the production security rollout:
 
-- backend: `172.17.0.1:8090`, exposed as `https://intel.rendetalje.dk` through the named Cloudflare Tunnel
-- frontend: VDS port `3001`, exposed as `https://work-intelligence.rendetalje.dk`
+- backend: `172.17.0.1:8090`, exposed as `https://wie.aftergraph.org`
+- frontend: VDS port `3001`, exposed as `https://wie.aftergraph.org`
 - frontend API proxy target: `http://172.17.0.1:8090`
 - named tunnel network: `renos-control-edge` (`172.21.0.0/16`)
 - named tunnel origin for the API: `http://172.17.0.1:8090`
@@ -262,7 +262,7 @@ journalctl -u work-intelligence -f
 Run these checks against the public hostname after every production restart or deployment:
 
 ```bash
-API=https://intel.rendetalje.dk
+API=https://wie.aftergraph.org/api
 
 curl -fsS "$API/healthz"
 

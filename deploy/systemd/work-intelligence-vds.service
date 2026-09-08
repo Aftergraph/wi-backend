@@ -1,5 +1,5 @@
 [Unit]
-Description=Wie by Aftergraph (production VDS)
+Description=Wie backend (production VDS)
 After=network-online.target
 Wants=network-online.target
 
@@ -7,13 +7,13 @@ Wants=network-online.target
 Type=simple
 User=work-intelligence
 Group=work-intelligence
-WorkingDirectory=/opt/work-intelligence
+WorkingDirectory=/opt/wi-backend
 EnvironmentFile=/etc/aftergraph/work-intelligence.env
 Environment=AFTERGRAPH_DB=/var/lib/work-intelligence/wi.db
 Environment=AFTERGRAPH_HOST=172.17.0.1
 Environment=AFTERGRAPH_PORT=8090
-Environment=AFTERGRAPH_CORS_ORIGINS=https://work-intelligence.aftergraph.org,https://work-intelligence.rendetalje.dk
-ExecStart=/opt/work-intelligence/.venv/bin/aftergraph-work-intelligence
+Environment=AFTERGRAPH_CORS_ORIGINS=https://wie.aftergraph.org
+ExecStart=/opt/wi-backend/.venv/bin/aftergraph-work-intelligence
 Restart=always
 RestartSec=5
 NoNewPrivileges=true
@@ -25,7 +25,7 @@ ProtectKernelModules=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
 LockPersonality=true
-ReadWritePaths=/var/lib/work-intelligence /opt/work-intelligence/logs
+ReadWritePaths=/var/lib/work-intelligence /opt/wi-backend/logs /opt/work-intelligence/logs
 
 [Install]
 WantedBy=multi-user.target
