@@ -1,7 +1,7 @@
 {
   "schema_version": "aftergraph.production-runtime-policy/1.0",
   "backend": {
-    "service": "work-intelligence",
+    "service": "wi-backend",
     "user": "work-intelligence",
     "group": "work-intelligence",
     "environment_file": "/etc/aftergraph/work-intelligence.env",
@@ -10,7 +10,7 @@
     "allow_dropins": false
   },
   "frontend": {
-    "service": "work-intelligence-web",
+    "service": "wi-frontend",
     "user": "work-intelligence-web",
     "group": "work-intelligence-web",
     "environment_file": "/etc/aftergraph/work-intelligence-web.env",
