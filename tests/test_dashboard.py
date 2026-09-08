@@ -37,7 +37,7 @@ class TestDashboard:
         resp = client.get("/dashboard")
         assert resp.status_code == 200
         assert "text/html" in resp.headers["content-type"]
-        assert "Aftergraph Work Intelligence" in resp.text
+        assert "Wie by Aftergraph" in resp.text
 
     def test_dashboard_empty(self, client):
         resp = client.get("/dashboard")

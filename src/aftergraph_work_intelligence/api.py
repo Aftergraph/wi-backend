@@ -484,7 +484,7 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         setup_logging()
-        logger.info("Starting Aftergraph Work Intelligence V2", extra={"version": "0.2.0"})
+        logger.info("Starting Wie by Aftergraph", extra={"version": "0.2.0"})
         db_path.parent.mkdir(parents=True, exist_ok=True)
         store = SQLiteStore(db_path)
         app.state.store = store
@@ -528,11 +528,11 @@ def create_app(
             store.close()
 
     app = FastAPI(
-        title="Aftergraph Work Intelligence",
+        title="Wie by Aftergraph",
         version="0.2.0",
-        description="""## Aftergraph Work Intelligence V2
+        description="""## Wie by Aftergraph
 
-Production-grade observation → WorkItem inference engine.
+Work Intelligence Engine. Production-grade observation → WorkItem inference engine.
 
 ### Authentication
 - **Bearer token**: `Authorization: Bearer <token>` (full admin access)
@@ -1827,7 +1827,7 @@ Production-grade observation → WorkItem inference engine.
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Aftergraph Work Intelligence - Dashboard</title>
+<title>Wie by Aftergraph - Dashboard</title>
 <style>
   body {{ font-family: system-ui, -apple-system, sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; background: #f8f9fa; color: #212529; }}
   h1 {{ color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 10px; }}
@@ -1843,7 +1843,7 @@ Production-grade observation → WorkItem inference engine.
 </style>
 </head>
 <body>
-<h1>Aftergraph Work Intelligence</h1>
+<h1>Wie by Aftergraph</h1>
 <div class="stats">
   <div class="stat"><div class="number">{total_obs}</div><div class="label">Observations</div></div>
   <div class="stat"><div class="number">{total_wi}</div><div class="label">Work Items</div></div>
@@ -1856,7 +1856,7 @@ Production-grade observation → WorkItem inference engine.
 <table><tr><th>Tenant</th><th>Count</th></tr>{tenant_rows}</table>
 <h2>By Priority</h2>
 <table><tr><th>Priority</th><th>Count</th></tr>{priority_rows}</table>
-<div class="footer">Aftergraph Work Intelligence V2 | API: <a href="/docs">/docs</a></div>
+<div class="footer">Wie by Aftergraph | API: <a href="/docs">/docs</a></div>
 </body></html>"""
         return HTMLResponse(content=html)
 
@@ -2131,7 +2131,7 @@ Production-grade observation → WorkItem inference engine.
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Aftergraph Work Intelligence V2")
+    parser = argparse.ArgumentParser(description="Wie by Aftergraph (Work Intelligence Engine)")
     parser.add_argument("--host", default=os.getenv("AFTERGRAPH_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087")))
     parser.add_argument("--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db"))

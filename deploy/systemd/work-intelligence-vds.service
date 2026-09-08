@@ -1,5 +1,5 @@
 [Unit]
-Description=Aftergraph Work Intelligence V2 (production VDS)
+Description=Wie by Aftergraph (production VDS)
 After=network-online.target
 Wants=network-online.target
 

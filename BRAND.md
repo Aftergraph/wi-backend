@@ -1,4 +1,4 @@
-# Work Intelligence GitHub Brand Surface
+# Wie GitHub Brand Surface
 
 This repository consumes the canonical Aftergraph GitHub Visual Asset Standard v1.0.
 

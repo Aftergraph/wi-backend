@@ -1,4 +1,4 @@
-# Aftergraph Work Intelligence V2 — API Reference
+# Wie by Aftergraph — API Reference
 
 Base URL: `http://127.0.0.1:8087`  
 API versioning: `X-API-Version: v1` header on responses.  
@@ -142,7 +142,7 @@ Promotes a work item to the works-execution queue (transition to `promoted` stat
 
 **Request body:**
 ```json
-{ "actor": "wi-web", "reason": "Promoted to works-execution from Work Intelligence Web" }
+{ "actor": "wi-web", "reason": "Promoted to works-execution from Wie Web" }
 ```
 
 **Response (200 OK):** The updated work item (state-aware payload).

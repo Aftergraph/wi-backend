@@ -1,7 +1,7 @@
 {
   "schema": "aftergraph.brand-assets/1.0",
-  "repo": "Aftergraph/work-intelligence-v2",
-  "brand": "Work Intelligence",
+  "repo": "Aftergraph/wi-backend",
+  "brand": "Wie",
   "role": "work-inference",
   "status": "provisional-not-trademark-cleared",
   "accent": "#7759E8",

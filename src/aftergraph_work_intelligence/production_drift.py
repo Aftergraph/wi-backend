@@ -372,7 +372,7 @@ def evaluate_snapshot(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only Work Intelligence production drift check")
+    parser = argparse.ArgumentParser(description="Read-only Wie production drift check")
     parser.add_argument("--repo-dir", default="/opt/work-intelligence")
     parser.add_argument("--policy", default=str(DEFAULT_POLICY_PATH))
     parser.add_argument("--expected-sha", default=None)
