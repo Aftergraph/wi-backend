@@ -1,7 +1,7 @@
 # Production VDS Deployment Runbook
 
 This is the exact-SHA promotion path for the Wie backend behind
-`https://intel.rendetalje.dk` on the measured production host `vmi3517816`.
+`https://wie.aftergraph.org` on the measured production host `vmi3517816`.
 
 ## Measured production contract
 

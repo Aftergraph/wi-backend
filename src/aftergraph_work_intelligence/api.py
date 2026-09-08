@@ -577,7 +577,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         origin.strip().rstrip("/")
         for origin in os.getenv(
             "AFTERGRAPH_CORS_ORIGINS",
-            "https://work-intelligence.rendetalje.dk,https://docs.aftergraph.org,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
+            "https://wie.aftergraph.org,http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
         ).split(",")
         if origin.strip()
     ]
