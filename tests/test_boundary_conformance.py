@@ -1,5 +1,5 @@
 """
-Conformance tests for the Work Intelligence V2 ⇄ Trust Gateway boundary contract.
+Conformance tests for the Wie ⇄ Trust Gateway boundary contract.
 
 Vendored contract: contracts/work-intelligence-boundary/1.0.json
 Canonical source: Aftergraph/after-graph-governance docs/contracts/work-intelligence-boundary/1.0.json

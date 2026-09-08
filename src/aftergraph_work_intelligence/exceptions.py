@@ -1,4 +1,4 @@
-"""Custom exceptions for Work Intelligence V2."""
+"""Custom exceptions for Wie."""
 
 from __future__ import annotations
 

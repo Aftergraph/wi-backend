@@ -1,5 +1,5 @@
 """
-Performance benchmarks for Work Intelligence V2.
+Performance benchmarks for Wie.
 
 Measures:
 - Ingest latency (p50, p95, p99)
