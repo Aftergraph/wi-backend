@@ -17,9 +17,9 @@
 
 The permanent webhook hooks are configured on both repositories:
 
-- `Aftergraph/work-intelligence-v2` hook `675062310`
-- `Aftergraph/work-intelligence-web` hook `675062318`
-- URL: `https://intel.rendetalje.dk/v1/webhook/github`
+- `Aftergraph/wi-backend` hook `675062310`
+- `Aftergraph/wi-frontend` hook `675062318`
+- URL: `https://work-intelligence.aftergraph.org/api/webhooks/github`
 - Content type: JSON
 - GitHub ping read-back: HTTP 202 / OK
 

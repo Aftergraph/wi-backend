@@ -1,5 +1,5 @@
 """
-Adversarial tests for Work Intelligence V2.
+Adversarial tests for Wie.
 
 Proves that the system resists:
 - Tenant isolation violations (cross-tenant data leaks)

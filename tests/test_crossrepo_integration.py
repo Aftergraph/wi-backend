@@ -1,5 +1,5 @@
 """
-Cross-repo integration tests for Work Intelligence V2.
+Cross-repo integration tests for Wie.
 
 Tests the full canonical flow against live or in-process fakes of:
 - RenOS Control (operations API on port 8788)
