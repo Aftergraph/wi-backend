@@ -12,7 +12,7 @@ DRIFT_MODULE="src/aftergraph_work_intelligence/production_drift.py"
 LOCAL_API="http://172.17.0.1:8090"
 LOCAL_FRONTEND="http://127.0.0.1:3001"
 PUBLIC_API=""
-PUBLIC_FRONTEND="https://wie.aftergraph.org"
+PUBLIC_FRONTEND="https://work-intelligence.aftergraph.org"
 TARGET_SHA=""
 INSTALL_UNIT=0
 PREFLIGHT_ONLY=0
@@ -172,9 +172,9 @@ if missing:
 db_path = values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db")
 host = values.get("AFTERGRAPH_HOST", "172.17.0.1")
 port = values.get("AFTERGRAPH_PORT", "8090")
-cors = values.get("AFTERGRAPH_CORS_ORIGINS", "https://wie.aftergraph.org")
+cors = values.get("AFTERGRAPH_CORS_ORIGINS", "https://work-intelligence.aftergraph.org")
 
-if cors != "https://wie.aftergraph.org":
+if cors != "https://work-intelligence.aftergraph.org":
     raise SystemExit("AFTERGRAPH_CORS_ORIGINS is not the production frontend allowlist")
 if values.get("AFTERGRAPH_DB", "/var/lib/work-intelligence/wi.db") != "/var/lib/work-intelligence/wi.db":
     raise SystemExit("AFTERGRAPH_DB must be /var/lib/work-intelligence/wi.db")

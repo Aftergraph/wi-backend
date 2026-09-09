@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from aftergraph_work_intelligence.secure_api import create_app
 
-FRONTEND_ORIGIN = "https://wie.aftergraph.org"
+FRONTEND_ORIGIN = "https://work-intelligence.aftergraph.org"
 
 
 def test_secure_factory_fails_closed_without_credentials(tmp_path, monkeypatch):
