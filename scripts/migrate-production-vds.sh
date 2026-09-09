@@ -221,7 +221,7 @@ runtime = {
     "AFTERGRAPH_DB": "/var/lib/work-intelligence/wi.db",
     "AFTERGRAPH_HOST": "172.17.0.1",
     "AFTERGRAPH_PORT": "8090",
-    "AFTERGRAPH_CORS_ORIGINS": "https://wie.aftergraph.org",
+    "AFTERGRAPH_CORS_ORIGINS": "https://work-intelligence.aftergraph.org",
 }
 kept: list[str] = []
 evidence_present = False
