@@ -7,7 +7,10 @@ on:
     types: [opened, synchronize, ready_for_review]
   push:
     branches: [main]
-permissions: {}
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
 jobs:
   sentinel-gate:
     uses: Aftergraph/.github/.github/workflows/agent-review.yml@c2273d8b60cce21d1d401cdddce4f3298388ea43
