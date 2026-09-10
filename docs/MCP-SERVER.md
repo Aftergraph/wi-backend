@@ -47,17 +47,26 @@ a header (per-tenant `ak_*` key or master Bearer token):
 {
   "mcpServers": {
     "wi": {
-      "url": "https://work-intelligence.aftergraph.org/mcp",
+      "url": "http://172.17.0.1:8090/mcp",
       "headers": { "Authorization": "Bearer <ak_*_or_master_token>" }
     }
   }
 }
 ```
 
-Smoke-test without a client:
+The URL above is on-box (VDS). Remote clients need a reverse-proxy
+route `…/mcp → <backend>/mcp` that preserves the `Host` header —
+verified 2026-09-10 that the public domain currently serves only the
+frontend SPA (even `/v1/*` returns HTML), so no public backend route
+exists yet. That proxy route is a deploy prerequisite owned by ops;
+once present, use the public URL with
+`AFTERGRAPH_MCP_PUBLIC_HOST` covering the public hostname (already in
+the VDS unit).
+
+Smoke-test without a client (on-box):
 
 ```bash
-curl -sS -D - -o /dev/null -X POST https://work-intelligence.aftergraph.org/mcp \
+curl -sS -D - -o /dev/null -X POST http://172.17.0.1:8090/mcp \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json, text/event-stream' \
   -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" \
