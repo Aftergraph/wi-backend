@@ -471,6 +471,39 @@ class TestMcpBehavior:
         assert result["authority"]["execution_authority"] == "evaluation-only"
 
 
+class TestMcpBarePath:
+    """Strict HTTP clients must reach the tools on bare /mcp (no 307)."""
+
+    def test_bare_mcp_path_served_without_redirect(
+        self, tmp_path, master_token, bearer
+    ):
+        app = create_secure_app(db_path=tmp_path / "bare.db", api_token=master_token)
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **bearer,
+        }
+        with TestClient(
+            app, base_url="http://127.0.0.1:8000", follow_redirects=False
+        ) as client:
+            resp = client.post(
+                "/mcp",
+                headers=headers,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "t", "version": "1"},
+                    },
+                },
+            )
+        assert resp.status_code == 200
+        assert resp.headers.get("mcp-session-id")
+
+
 class TestMcpTransportSecurity:
     """AFTERGRAPH_MCP_PUBLIC_HOST must admit hosts WITHOUT disabling the
     DNS-rebinding guard (the SDK switches protection off for non-loopback
