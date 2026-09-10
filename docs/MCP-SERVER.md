@@ -12,7 +12,9 @@ uv sync
 AFTERGRAPH_API_TOKEN=<master-token> uv run aftergraph-work-intelligence
 ```
 
-`POST/GET/DELETE http://127.0.0.1:8087/mcp` speaks MCP Streamable HTTP.
+`POST/GET/DELETE http://127.0.0.1:8087/mcp` speaks MCP Streamable HTTP
+(bare `/mcp` and `/mcp/` both answer directly, no redirect, so strict
+clients work).
 Unset, only loopback `Host` values are admitted (421 otherwise). For
 non-loopback access set `AFTERGRAPH_MCP_PUBLIC_HOST` to a comma-separated
 host list — the guard stays ON and admits exactly those hosts (bare and
@@ -70,7 +72,7 @@ Mutating data tools and all admin tools write audit rows
 ## Verify
 
 ```bash
-uv run pytest tests/test_mcp.py -q   # 17 tests: surface, gates, transport, replay, admin, evaluate, host-guard
+uv run pytest tests/test_mcp.py -q   # 18 tests: surface, gates, transport, replay, admin, evaluate, host-guard, bare-path
 uv run pytest tests/ -q              # full suite
 uvx ruff check src/aftergraph_work_intelligence/ tests/test_mcp.py
 ```

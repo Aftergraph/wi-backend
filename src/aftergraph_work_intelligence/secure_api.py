@@ -8,11 +8,14 @@ from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Route
+from starlette.types import Receive, Scope, Send
 
 from .api import EVALUATOR_PATH, any_tenant_webhook_secrets
 from .api import create_app as create_core_app
@@ -294,6 +297,34 @@ def create_app(
         transport_security=mcp_transport_security_from_env(),
     )
     app.mount("/mcp", mcp_app)
+
+    class _McpBarePathApp:
+        """Dispatch the bare /mcp path into the mounted sub-app.
+
+        A class (not a function) so Route uses it as a raw ASGI app. The
+        Mount only matches /mcp/… (Starlette answers 307 for the bare
+        path); re-scope exactly like the mount would so strict HTTP
+        clients that do not follow redirects work against /mcp too.
+        """
+
+        def __init__(self, sub_app: Any) -> None:
+            self.sub_app = sub_app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            root_path = scope.get("root_path", "")
+            await self.sub_app(
+                {**scope, "path": "/", "root_path": f"{root_path}/mcp"},
+                receive,
+                send,
+            )
+
+    app.routes.append(
+        Route(
+            "/mcp",
+            endpoint=_McpBarePathApp(mcp_app),
+            methods=["GET", "POST", "DELETE"],
+        )
+    )
 
     # Starlette never runs a mounted sub-app's lifespan; enter the MCP
     # session manager's lifespan from the host lifespan instead.
