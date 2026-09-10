@@ -222,6 +222,15 @@ MIGRATIONS = [
         ON intake_transitions(idempotency_key);
         """,
     ),
+    (
+        6,
+        "add_api_key_tenant_binding",
+        """
+        ALTER TABLE api_keys ADD COLUMN tenant_id TEXT;
+        CREATE INDEX IF NOT EXISTS idx_api_keys_tenant
+        ON api_keys(tenant_id);
+        """,
+    ),
 ]
 
 

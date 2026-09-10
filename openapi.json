@@ -3691,7 +3691,7 @@
     "/v1/api-keys": {
       "post": {
         "summary": "Create Api Key",
-        "description": "Create a new API key. Key is only returned once.",
+        "description": "Create a new API key. Key is only returned once.\n\nOptional tenant_id binds the key to one tenant: bound keys are\nrejected for every other tenant. Unbound keys keep working with an\nexplicit tenant, matching historical behavior.",
         "operationId": "create_api_key_v1_api_keys_post",
         "parameters": [
           {
@@ -5083,6 +5083,18 @@
             "default": [
               "read"
             ]
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
           }
         },
         "type": "object",

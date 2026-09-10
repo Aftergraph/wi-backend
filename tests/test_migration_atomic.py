@@ -65,7 +65,7 @@ def test_run_stops_at_first_failure(tmp_path, monkeypatch):
     assert "u" not in tables
 
 
-def test_v4_era_db_upgrades_through_v5(tmp_path):
+def test_v4_era_db_upgrades_through_v6(tmp_path):
     """Production-equivalent drill: v4-era DB (no idempotency_key) upgrades cleanly."""
     from aftergraph_work_intelligence.migrations import run_migrations
     from aftergraph_work_intelligence.store import SQLiteStore
@@ -78,7 +78,7 @@ def test_v4_era_db_upgrades_through_v5(tmp_path):
     conn.close()
     result = run_migrations(db_path=db)
     assert result["ok"] is True
-    assert result["current_version"] == 5
+    assert result["current_version"] == 6
     conn = sqlite3.connect(db)
     cols = {row[1] for row in conn.execute("PRAGMA table_info(intake_transitions)").fetchall()}
     conn.close()
