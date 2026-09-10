@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aftergraph.dev/contracts/proactivity/0.1.json",
+  "title": "Aftergraph Proactivity",
+  "description": "EXPERIMENTAL proactivity sensing contract. It records one sensing path projecting a native event to a candidate outcome with correlation paths. Candidates never self-admit to commitments and paths claim no execution authority: the Cron path retains zero execution authority. It confers no authority and replaces no canonical source.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "proactivity/0.1"},
+    "sensing_id": {"type": "string", "pattern": "^sen_[a-f0-9]{32}$"},
+    "path": {
+      "type": "string",
+      "enum": ["wie", "runtime", "cron"]
+    },
+    "native_ref": {"type": "string", "minLength": 1, "maxLength": 512},
+    "candidate_kind": {
+      "type": "string",
+      "enum": ["opportunity", "attention_candidate", "commitment_candidate", "observation_update", "finding"]
+    },
+    "claims_execution": {"type": "boolean"},
+    "claims_admission": {"type": "boolean"},
+    "admitted_by_tg": {"type": "boolean"},
+    "correlated_paths": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 3,
+      "items": {"type": "string", "enum": ["wie", "runtime", "cron"]}
+    },
+    "asserted_at": {"type": "string", "minLength": 1, "maxLength": 64},
+    "tenant_id": {"type": "string", "pattern": "^ten_[a-f0-9]{32}$"}
+  },
+  "required": [
+    "schema",
+    "sensing_id",
+    "path",
+    "native_ref",
+    "candidate_kind",
+    "claims_execution",
+    "claims_admission",
+    "admitted_by_tg",
+    "correlated_paths",
+    "asserted_at",
+    "tenant_id"
+  ]
+}
