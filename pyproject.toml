@@ -11,7 +11,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=9,<10", "httpx>=0.28,<0.29"]
+dev = [
+    "pytest>=9,<10",
+    "httpx>=0.28,<0.29",
+    "pyyaml==6.0.3",
+]
 
 [project.scripts]
 aftergraph-work-intelligence = "aftergraph_work_intelligence.secure_api:main"
