@@ -3333,6 +3333,93 @@
         }
       }
     },
+    "/v1/sensing": {
+      "post": {
+        "summary": "Submit Sensing",
+        "description": "Accept a proactivity sensing record, fail-closed.\n\nThis endpoint NEVER executes, admits, dispatches, or persists\nauthority. Accepted records correlate into the process-local\nsensing registry; the same native signal seen via Wie and Cron\ndedupes to a single attention candidate. Rejections return\naccepted=false and store nothing.",
+        "operationId": "submit_sensing_v1_sensing_post",
+        "parameters": [
+          {
+            "name": "authorization",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "X-Hub-Signature-256",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Hub-Signature-256"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SensingRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/autonomy/decisions/history": {
       "get": {
         "summary": "Autonomy History",
@@ -5447,6 +5534,104 @@
           "actor"
         ],
         "title": "ReviewRequest"
+      },
+      "SensingRequest": {
+        "properties": {
+          "schema": {
+            "type": "string",
+            "pattern": "^proactivity/0\\.1$",
+            "title": "Schema"
+          },
+          "sensing_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^sen_[a-f0-9]{32}$",
+            "title": "Sensing Id"
+          },
+          "path": {
+            "type": "string",
+            "enum": [
+              "wie",
+              "runtime",
+              "cron"
+            ],
+            "title": "Path"
+          },
+          "native_ref": {
+            "type": "string",
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Native Ref"
+          },
+          "candidate_kind": {
+            "type": "string",
+            "enum": [
+              "opportunity",
+              "attention_candidate",
+              "commitment_candidate",
+              "observation_update",
+              "finding"
+            ],
+            "title": "Candidate Kind"
+          },
+          "claims_execution": {
+            "type": "boolean",
+            "title": "Claims Execution"
+          },
+          "claims_admission": {
+            "type": "boolean",
+            "title": "Claims Admission"
+          },
+          "admitted_by_tg": {
+            "type": "boolean",
+            "title": "Admitted By Tg"
+          },
+          "correlated_paths": {
+            "items": {
+              "type": "string",
+              "enum": [
+                "wie",
+                "runtime",
+                "cron"
+              ]
+            },
+            "type": "array",
+            "maxItems": 3,
+            "minItems": 1,
+            "title": "Correlated Paths"
+          },
+          "asserted_at": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Asserted At"
+          },
+          "tenant_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^ten_[a-f0-9]{32}$",
+            "title": "Tenant Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "schema",
+          "sensing_id",
+          "path",
+          "native_ref",
+          "candidate_kind",
+          "claims_execution",
+          "claims_admission",
+          "admitted_by_tg",
+          "correlated_paths",
+          "asserted_at",
+          "tenant_id"
+        ],
+        "title": "SensingRequest",
+        "description": "Wie proactivity sensing intake (contract proactivity/0.1, fail-closed)."
       },
       "ValidationError": {
         "properties": {

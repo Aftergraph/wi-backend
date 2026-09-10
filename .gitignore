@@ -12,5 +12,6 @@ dist/
 *.json
 !contracts/work-intelligence-boundary/1.0.json
 !contracts/autonomy-decision-evaluate/1.0.json
+!contracts/proactivity/0.1.json
 logs/
 20260905_*
