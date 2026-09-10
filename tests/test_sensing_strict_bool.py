@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from aftergraph_work_intelligence.api import SensingRequest, create_app
 
@@ -35,14 +36,14 @@ FALSY_NON_BOOLS = ["no", "0", 0, "off", "false", "False", "nope", "", None]
 @pytest.mark.parametrize("field", BOOL_FIELDS)
 @pytest.mark.parametrize("value", TRUTHY_NON_BOOLS)
 def test_truthy_non_bool_rejected(field, value):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SensingRequest(**{**BASE, field: value})
 
 
 @pytest.mark.parametrize("field", BOOL_FIELDS)
 @pytest.mark.parametrize("value", FALSY_NON_BOOLS)
 def test_falsy_non_bool_rejected(field, value):
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         SensingRequest(**{**BASE, field: value})
 
 
