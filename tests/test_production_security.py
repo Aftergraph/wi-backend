@@ -5,6 +5,9 @@ from fastapi.testclient import TestClient
 from aftergraph_work_intelligence.secure_api import create_app
 
 FRONTEND_ORIGIN = "https://work-intelligence.aftergraph.org"
+DOCS_ORIGIN = "https://docs.aftergraph.org"
+RENDETALJE_ORIGIN = "https://work-intelligence.rendetalje.dk"
+CANONICAL_ORIGINS = f"{FRONTEND_ORIGIN},{DOCS_ORIGIN}"
 
 
 def test_secure_factory_fails_closed_without_credentials(tmp_path, monkeypatch):
@@ -69,6 +72,38 @@ def test_frontend_cors_origin_is_allowlisted(tmp_path):
     assert response.headers["access-control-allow-origin"] == FRONTEND_ORIGIN
     assert response.headers["access-control-allow-credentials"] == "true"
     assert response.headers["vary"] == "Origin"
+
+
+def test_docs_try_it_origin_is_allowlisted(tmp_path, monkeypatch):
+    monkeypatch.setenv("AFTERGRAPH_CORS_ORIGINS", CANONICAL_ORIGINS)
+    app = create_app(db_path=tmp_path / "secure.db", api_token="master-token")
+    with TestClient(app) as client:
+        response = client.options(
+            "/v1/observations",
+            headers={
+                "Origin": DOCS_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == DOCS_ORIGIN
+
+
+def test_separate_property_origin_is_denied(tmp_path, monkeypatch):
+    monkeypatch.setenv("AFTERGRAPH_CORS_ORIGINS", CANONICAL_ORIGINS)
+    app = create_app(db_path=tmp_path / "secure.db", api_token="master-token")
+    with TestClient(app) as client:
+        response = client.options(
+            "/v1/observations",
+            headers={
+                "Origin": RENDETALJE_ORIGIN,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "authorization,content-type",
+            },
+        )
+    assert response.status_code == 403
+    assert "access-control-allow-origin" not in response.headers
 
 
 def test_api_key_requires_full_secret_not_only_stored_prefix(tmp_path):
