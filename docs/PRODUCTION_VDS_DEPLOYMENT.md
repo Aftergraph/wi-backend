@@ -45,6 +45,28 @@ this migration. The currently running service historically used the application'
 legacy evidence-secret default. Rotating that material requires a versioned
 key-rotation design so old evidence does not become unverifiable.
 
+## Canonical CORS allowlist
+
+Production serves the Aftergraph property only:
+
+```text
+https://work-intelligence.aftergraph.org,https://docs.aftergraph.org
+```
+
+- The WI app calls same-origin `/api` (server-side proxy) and never needs
+  direct browser-to-backend CORS; `docs.aftergraph.org` is allowlisted for
+  the docs Try-it console, which calls the backend directly.
+- `https://work-intelligence.rendetalje.dk` is a separate property and is
+  deliberately excluded: it serves the same proxied app bundle, so no
+  browser there ever needs direct backend access. Do not re-add it without
+  an owner decision.
+- Enforced in three places, which must agree: `scripts/deploy-production-vds.sh`
+  preflight (exact-string match, fail-closed), `scripts/migrate-production-vds.sh`
+  canonical env rewrite, and `tests/test_production_security.py` (docs-allow /
+  rendetalje-deny probes). The systemd unit `Environment=` and the env file
+  must carry the identical value — the unit overrides the file, so updating
+  only one silently keeps the other effective.
+
 ## 1. Bootstrap from the verified exact head
 
 ```bash
