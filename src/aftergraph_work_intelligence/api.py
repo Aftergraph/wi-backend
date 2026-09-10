@@ -43,6 +43,14 @@ from .body_log import BodyLoggingMiddleware
 from .cache import Cache
 from .evidence import build_evidence
 from .exceptions import WorkIntelligenceError
+from .merge_kernel import (
+    MergeConflict,
+    MergeCredential,
+    MergeInvalid,
+    MergeNotFound,
+    result_as_dict,
+    run_merge,
+)
 from .metrics import MetricsRecorder
 from .migrations import run_migrations
 from .models import ObservationInput, Publication, utc_now
@@ -93,18 +101,16 @@ class JSONFormatter(logging.Formatter):
 def setup_logging():
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JSONFormatter())
-    
+
     logging.root.handlers = [handler]
     logging.root.setLevel(logging.INFO)
-    
+
     # Silence noisy loggers
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 
 
 logger = logging.getLogger("aftergraph.work-intelligence")
-
-
 
 
 def _fire_webhooks(app_state, event: str, payload: dict) -> None:
@@ -133,7 +139,9 @@ def _fire_webhooks(app_state, event: str, payload: dict) -> None:
                 headers["X-Webhook-Signature"] = f"sha256={sig}"
             for attempt in range(3):
                 try:
-                    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+                    req = urllib.request.Request(
+                        url, data=body, headers=headers, method="POST"
+                    )
                     urllib.request.urlopen(req, timeout=5)
                     break
                 except Exception:
@@ -147,7 +155,9 @@ def _fire_webhooks(app_state, event: str, payload: dict) -> None:
         loop = asyncio.get_event_loop()
         if loop.is_running():
             _task = loop.create_task(broadcast_update(event, payload))
-            _task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            _task.add_done_callback(
+                lambda t: t.exception() if not t.cancelled() else None
+            )
     except Exception:
         pass
 
@@ -160,6 +170,7 @@ def _fire_webhooks(app_state, event: str, payload: dict) -> None:
 # --- WebSocket broadcast (module-level so _fire_webhooks and app share it) ---
 ws_clients: set = set()
 ws_last_heartbeat: dict = {}  # client -> timestamp
+
 
 async def broadcast_update(event: str, data: dict):
     """Broadcast update to all connected WebSocket clients."""
@@ -201,7 +212,9 @@ class RateLimiter:
         window_start = now - 60
 
         # Check global/key limit
-        self.requests[client_id] = [t for t in self.requests[client_id] if t > window_start]
+        self.requests[client_id] = [
+            t for t in self.requests[client_id] if t > window_start
+        ]
         limit = self.get_limit(client_id)
         if len(self.requests[client_id]) >= limit:
             return False
@@ -209,7 +222,9 @@ class RateLimiter:
         # Check endpoint-specific limit
         if endpoint and endpoint in self.endpoint_limits:
             ep_key = f"{client_id}:{endpoint}"
-            self._endpoint_requests[ep_key] = [t for t in self._endpoint_requests[ep_key] if t > window_start]
+            self._endpoint_requests[ep_key] = [
+                t for t in self._endpoint_requests[ep_key] if t > window_start
+            ]
             ep_limit = self.endpoint_limits[endpoint]
             if len(self._endpoint_requests[ep_key]) >= ep_limit:
                 return False
@@ -224,7 +239,9 @@ class RateLimiter:
         now = time.time()
         window_start = now - 60
         ep_key = f"{client_id}:{endpoint}"
-        self._endpoint_requests[ep_key] = [t for t in self._endpoint_requests[ep_key] if t > window_start]
+        self._endpoint_requests[ep_key] = [
+            t for t in self._endpoint_requests[ep_key] if t > window_start
+        ]
         limit = self.endpoint_limits.get(endpoint, self.default_limit)
         return {
             "used": len(self._endpoint_requests[ep_key]),
@@ -236,7 +253,9 @@ class RateLimiter:
         """Get current usage stats for a client."""
         now = time.time()
         window_start = now - 60
-        self.requests[client_id] = [t for t in self.requests[client_id] if t > window_start]
+        self.requests[client_id] = [
+            t for t in self.requests[client_id] if t > window_start
+        ]
         limit = self.get_limit(client_id)
         return {
             "used": len(self.requests[client_id]),
@@ -258,7 +277,9 @@ class ObservationRequest(BaseModel):
     title_hint: str | None = Field(default=None, max_length=256)
     owner_hint: str | None = Field(default=None, max_length=256)
     due_hint: str | None = Field(default=None, max_length=256)
-    priority_hint: str | None = Field(default=None, pattern="^(low|medium|high|critical)$")
+    priority_hint: str | None = Field(
+        default=None, pattern="^(low|medium|high|critical)$"
+    )
 
 
 class PublishRequest(BaseModel):
@@ -305,9 +326,7 @@ class AutonomyEvaluateRequest(BaseModel):
     tenant_id: str = Field(min_length=1, max_length=128)
     repository: str = Field(min_length=3, max_length=256, pattern=r"^[^/\s]+/[^/\s]+$")
     ref: str = Field(min_length=1, max_length=256)
-    head_sha: str = Field(
-        min_length=7, max_length=64, pattern=r"^[0-9a-fA-F]{7,64}$"
-    )
+    head_sha: str = Field(min_length=7, max_length=64, pattern=r"^[0-9a-fA-F]{7,64}$")
     event_key: str = Field(min_length=1, max_length=512)
     capability: Literal[
         "dependency.patch.merge",
@@ -346,7 +365,9 @@ def _tenant_secret_env_name(tenant_id: str) -> str:
     return f"{_TENANT_WEBHOOK_SECRET_PREFIX}{slug}"
 
 
-def resolve_webhook_secret(tenant_id: str | None, configured_global: str | None) -> str | None:
+def resolve_webhook_secret(
+    tenant_id: str | None, configured_global: str | None
+) -> str | None:
     """Resolve the HMAC secret for a tenant: per-tenant env override, else global.
 
     ponytail: env-based, no plaintext secrets in the DB. Fail-closed None.
@@ -447,8 +468,7 @@ def _persist_autonomy_decision(
                     human.get("approval_type", "none"),
                     _json.dumps(evaluation.get("blast_radius", {})),
                     _json.dumps(evaluation.get("blockers", [])),
-                    subject.get("evaluated_at")
-                    or evaluation.get("evaluated_at", ""),
+                    subject.get("evaluated_at") or evaluation.get("evaluated_at", ""),
                     _json.dumps(payload.model_dump()),
                 ),
             )
@@ -466,13 +486,21 @@ def create_app(
     webhook_secret: str | None = None,
 ) -> FastAPI:
     db_path = Path(db_path)
-    configured_token = api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
-    configured_publisher = publisher if publisher is not None else publisher_from_env()
-    configured_policy_store = policy_store if policy_store is not None else PolicyStore()
-    configured_evidence_secret = evidence_secret if evidence_secret is not None else os.getenv(
-        "AFTERGRAPH_EVIDENCE_SECRET", "aftergraph-work-intelligence"
+    configured_token = (
+        api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
     )
-    rate_limiter = RateLimiter(requests_per_minute=int(os.getenv("AFTERGRAPH_RATE_LIMIT", "60")))
+    configured_publisher = publisher if publisher is not None else publisher_from_env()
+    configured_policy_store = (
+        policy_store if policy_store is not None else PolicyStore()
+    )
+    configured_evidence_secret = (
+        evidence_secret
+        if evidence_secret is not None
+        else os.getenv("AFTERGRAPH_EVIDENCE_SECRET", "aftergraph-work-intelligence")
+    )
+    rate_limiter = RateLimiter(
+        requests_per_minute=int(os.getenv("AFTERGRAPH_RATE_LIMIT", "60"))
+    )
     # Stricter per-endpoint budget for the autonomy evaluator: it is read-only and
     # fail-closed, but each call is compute-heavy — a modest default keeps an
     # unauthenticated caller from pinning CPU via the public webhook path.
@@ -492,14 +520,20 @@ def create_app(
         # Run pending migrations (use store's connection for :memory: support)
         migration_result = run_migrations(connection=store._db)
         app.state.migration_version = migration_result["current_version"]
-        app.state.service = WorkIntelligenceService(store, policy_store=configured_policy_store)
+        app.state.service = WorkIntelligenceService(
+            store, policy_store=configured_policy_store
+        )
         app.state.policy_store = configured_policy_store
-        app.state.transitions = TransitionEngine(store, policy_store=configured_policy_store)
+        app.state.transitions = TransitionEngine(
+            store, policy_store=configured_policy_store
+        )
         app.state.publisher = configured_publisher
         app.state.metrics = MetricsRecorder(store)
         app.state.evidence_secret = configured_evidence_secret
-        configured_webhook_secret = webhook_secret if webhook_secret is not None else os.getenv(
-            "AFTERGRAPH_WEBHOOK_SECRET"
+        configured_webhook_secret = (
+            webhook_secret
+            if webhook_secret is not None
+            else os.getenv("AFTERGRAPH_WEBHOOK_SECRET")
         )
         app.state.webhook_secret = configured_webhook_secret
         # Initialize background task queue
@@ -556,11 +590,14 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     )
     # Add GZip compression
     from fastapi.middleware.gzip import GZipMiddleware
+
     app.add_middleware(GZipMiddleware, minimum_size=1000)
-    
+
     # Global exception handler for custom exceptions
     @app.exception_handler(WorkIntelligenceError)
-    async def work_intelligence_error_handler(request: Request, exc: WorkIntelligenceError):
+    async def work_intelligence_error_handler(
+        request: Request, exc: WorkIntelligenceError
+    ):
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -582,7 +619,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if origin.strip()
     ]
     if "*" in cors_origins:
-        raise RuntimeError("AFTERGRAPH_CORS_ORIGINS must not contain '*' when credentials are enabled")
+        raise RuntimeError(
+            "AFTERGRAPH_CORS_ORIGINS must not contain '*' when credentials are enabled"
+        )
     app.add_middleware(
         CORSMiddleware,
         allow_origins=cors_origins,
@@ -594,8 +633,10 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     # Body logging middleware (configurable via env)
     app.add_middleware(
         BodyLoggingMiddleware,
-        log_request_body=os.getenv("AFTERGRAPH_LOG_REQUEST_BODY", "false").lower() == "true",
-        log_response_body=os.getenv("AFTERGRAPH_LOG_RESPONSE_BODY", "false").lower() == "true",
+        log_request_body=os.getenv("AFTERGRAPH_LOG_REQUEST_BODY", "false").lower()
+        == "true",
+        log_response_body=os.getenv("AFTERGRAPH_LOG_RESPONSE_BODY", "false").lower()
+        == "true",
         max_chars=int(os.getenv("AFTERGRAPH_BODY_LOG_MAX_CHARS", "1000")),
     )
 
@@ -605,21 +646,28 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         response = await call_next(request)
         response.headers["X-API-Version"] = "v1"
         response.headers["X-App-Version"] = "0.2.0"
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; base-uri 'self'; frame-ancestors 'none'; object-src 'none'; "
             "form-action 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
             "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
             "img-src 'self' data: https:; connect-src 'self'"
         )
-        if request.url.path.startswith("/v1/") or request.url.path in {"/dashboard", "/healthz"}:
+        if request.url.path.startswith("/v1/") or request.url.path in {
+            "/dashboard",
+            "/healthz",
+        }:
             response.headers["Cache-Control"] = "no-store"
         return response
-    
+
     # Add timing middleware
     @app.middleware("http")
     async def add_timing(request: Request, call_next):
@@ -628,14 +676,21 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         duration = time.time() - start_time
         response.headers["X-Process-Time"] = str(round(duration * 1000, 2))
         return response
-    
+
     # Add usage tracking
-    usage_stats: dict[str, Any] = {"requests": 0, "by_path": defaultdict(int), "by_status": defaultdict(int), "errors": 0}
+    usage_stats: dict[str, Any] = {
+        "requests": 0,
+        "by_path": defaultdict(int),
+        "by_status": defaultdict(int),
+        "errors": 0,
+    }
     app.state.usage_stats = usage_stats
     app.state.rate_limiter = rate_limiter
 
     # Request size limiting middleware
-    MAX_REQUEST_SIZE = int(os.getenv("AFTERGRAPH_MAX_REQUEST_SIZE", "10485760"))  # 10MB default
+    MAX_REQUEST_SIZE = int(
+        os.getenv("AFTERGRAPH_MAX_REQUEST_SIZE", "10485760")
+    )  # 10MB default
 
     @app.middleware("http")
     async def limit_request_size(request: Request, call_next):
@@ -643,7 +698,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if content_length and int(content_length) > MAX_REQUEST_SIZE:
             return JSONResponse(
                 status_code=413,
-                content={"detail": f"Request too large. Max size: {MAX_REQUEST_SIZE} bytes"},
+                content={
+                    "detail": f"Request too large. Max size: {MAX_REQUEST_SIZE} bytes"
+                },
             )
         return await call_next(request)
 
@@ -669,7 +726,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             app.state.response_times = defaultdict(list)
         app.state.response_times[path_key].append(duration)
         if len(app.state.response_times[path_key]) > 1000:
-            app.state.response_times[path_key] = app.state.response_times[path_key][-500:]
+            app.state.response_times[path_key] = app.state.response_times[path_key][
+                -500:
+            ]
 
         # Structured log
         logger.info(
@@ -691,25 +750,32 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "status_code": response.status_code,
                 "duration_ms": round(duration * 1000, 2),
                 "client": request.client.host if request.client else "unknown",
-            }
+            },
         )
         return response
-    
+
     # Add rate limiting middleware
     @app.middleware("http")
     async def rate_limit_middleware(request: Request, call_next):
         client_id = request.client.host if request.client else "unknown"
         # Skip rate limiting for management/health endpoints
-        skip_paths = {"/health", "/v1/rate-limit", "/v1/metrics", "/v1/webhooks/stats", "/docs", "/openapi.json"}
+        skip_paths = {
+            "/health",
+            "/v1/rate-limit",
+            "/v1/metrics",
+            "/v1/webhooks/stats",
+            "/docs",
+            "/openapi.json",
+        }
         if request.url.path in skip_paths:
             return await call_next(request)
         if not rate_limiter.is_allowed(client_id):
             return JSONResponse(
                 status_code=429,
-                content={"detail": "Rate limit exceeded. Try again later."}
+                content={"detail": "Rate limit exceeded. Try again later."},
             )
         return await call_next(request)
-    
+
     # Add request ID middleware
     @app.middleware("http")
     async def add_request_id(request: Request, call_next):
@@ -718,7 +784,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         response = await call_next(request)
         response.headers["X-Request-ID"] = request_id
         return response
-    
+
     router = APIRouter(prefix="/v1")
 
     @app.post("/v1/webhook/github", include_in_schema=True)
@@ -732,9 +798,13 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         secret = os.getenv("AFTERGRAPH_GITHUB_WEBHOOK_SECRET")
         if secret:
             sig = request.headers.get("X-Hub-Signature-256", "")
-            expected = "sha256=" + _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
+            expected = (
+                "sha256=" + _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
+            )
             if not _hmac.compare_digest(sig, expected):
-                return JSONResponse(status_code=401, content={"detail": "invalid signature"})
+                return JSONResponse(
+                    status_code=401, content={"detail": "invalid signature"}
+                )
 
         event_name = request.headers.get("X-GitHub-Event", "push")
         try:
@@ -749,11 +819,14 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         adapter = GitHubAdapter()
         observations = list(adapter.observations(payload))
         if not observations:
-            return JSONResponse(status_code=202, content={
-                "event": event_name,
-                "status": "ignored",
-                "reason": "no actionable observations",
-            })
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "event": event_name,
+                    "status": "ignored",
+                    "reason": "no actionable observations",
+                },
+            )
 
         service: WorkIntelligenceService = request.app.state.service
         created = 0
@@ -770,24 +843,29 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
 
         status_code = 201 if created > 0 else 200
         wi = work_item
-        return JSONResponse(status_code=status_code, content={
-            "event": event_name,
-            "status": "ingested" if created > 0 else "replayed",
-            "observations_created": created,
-            "observations_replayed": replayed,
-            "work_item": {
-                "id": getattr(wi, "id", None),
-                "source": adapter.source,
-                "priority": getattr(wi, "priority", None),
-                "observation_count": getattr(wi, "observation_count", None),
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "event": event_name,
+                "status": "ingested" if created > 0 else "replayed",
+                "observations_created": created,
+                "observations_replayed": replayed,
+                "work_item": {
+                    "id": getattr(wi, "id", None),
+                    "source": adapter.source,
+                    "priority": getattr(wi, "priority", None),
+                    "observation_count": getattr(wi, "observation_count", None),
+                },
             },
-        })
+        )
 
     async def auth(
         request: Request,
         authorization: str | None = Header(default=None),
         x_api_key: str | None = Header(default=None, alias="X-API-Key"),
-        x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+        x_hub_signature_256: str | None = Header(
+            default=None, alias="X-Hub-Signature-256"
+        ),
     ) -> None:
         """Authenticate via Bearer token, API key, OR webhook HMAC-SHA256 signature.
 
@@ -832,7 +910,10 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         # would authenticate (fail-open). Gate the deferral on the exact path.
         if (
             x_hub_signature_256
-            and (getattr(request.app.state, "webhook_secret", None) or any_tenant_webhook_secrets())
+            and (
+                getattr(request.app.state, "webhook_secret", None)
+                or any_tenant_webhook_secrets()
+            )
             and request.url.path == EVALUATOR_PATH
         ):
             request.state.auth_method = "webhook_pending"
@@ -841,7 +922,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
 
         # No valid auth
         if configured_token:
-            raise HTTPException(status_code=401, detail="invalid or missing credentials")
+            raise HTTPException(
+                status_code=401, detail="invalid or missing credentials"
+            )
 
     async def require_admin(request: Request) -> None:
         """Restrict management-plane writes to the bearer master token.
@@ -896,17 +979,29 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             checks["cache"] = "unavailable"
 
         # Migration version
-        checks["migration_version"] = str(getattr(request.app.state, "migration_version", 0))
+        checks["migration_version"] = str(
+            getattr(request.app.state, "migration_version", 0)
+        )
 
         return checks
 
     @router.post("/observations", dependencies=[Depends(auth)])
-    def ingest_observation(payload: ObservationRequest, request: Request, svc: WorkIntelligenceService = Depends(service)):
+    def ingest_observation(
+        payload: ObservationRequest,
+        request: Request,
+        svc: WorkIntelligenceService = Depends(service),
+    ):
         try:
             result = svc.ingest(ObservationInput(**payload.model_dump()))
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        status = 201 if result.action == "created" else 202 if result.action == "observed" else 200
+        status = (
+            201
+            if result.action == "created"
+            else 202
+            if result.action == "observed"
+            else 200
+        )
         encoded = jsonable_encoder(asdict(result))
         _fire_webhooks(request.app.state, "observation.ingested", encoded)
         return JSONResponse(status_code=status, content=encoded)
@@ -937,17 +1032,32 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             # shape) — the engine is tenant-blind by design, endpoints gate.
             svc.get_work_item_detail(work_item_id, tenant_id)
             if payload.action == "approve":
-                item = engine.approve(work_item_id, actor=payload.actor, reason=payload.reason)
+                item = engine.approve(
+                    work_item_id, actor=payload.actor, reason=payload.reason
+                )
             elif payload.action == "reject":
-                item = engine.reject(work_item_id, actor=payload.actor, reason=payload.reason)
+                item = engine.reject(
+                    work_item_id, actor=payload.actor, reason=payload.reason
+                )
             elif payload.action == "snooze":
                 if payload.resume_at is None:
-                    raise HTTPException(status_code=400, detail="resume_at is required for snooze")
-                item = engine.snooze(work_item_id, actor=payload.actor, resume_at=payload.resume_at, reason=payload.reason)
+                    raise HTTPException(
+                        status_code=400, detail="resume_at is required for snooze"
+                    )
+                item = engine.snooze(
+                    work_item_id,
+                    actor=payload.actor,
+                    resume_at=payload.resume_at,
+                    reason=payload.reason,
+                )
             elif payload.action == "resume":
-                item = engine.resume(work_item_id, actor=payload.actor, reason=payload.reason)
+                item = engine.resume(
+                    work_item_id, actor=payload.actor, reason=payload.reason
+                )
             else:  # cancel
-                item = engine.cancel(work_item_id, actor=payload.actor, reason=payload.reason)
+                item = engine.cancel(
+                    work_item_id, actor=payload.actor, reason=payload.reason
+                )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
         except ValueError as exc:
@@ -967,7 +1077,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         engine: TransitionEngine = request.app.state.transitions
         try:
             svc.get_work_item_detail(work_item_id, tenant_id)
-            item = engine.promote_to_works(work_item_id, actor=payload.actor, reason=payload.reason)
+            item = engine.promote_to_works(
+                work_item_id, actor=payload.actor, reason=payload.reason
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
         except PermissionError as exc:
@@ -992,66 +1104,44 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         with reason `merged into <target>`, reusing TransitionEngine.cancel.
         Both items must exist under the same tenant (fail-closed 404
         otherwise); replaying the same merge is idempotent 200.
+        The flow itself lives in merge_kernel.run_merge (shared with MCP).
         """
-        if work_item_id == payload.target_work_item_id:
-            raise HTTPException(status_code=400, detail="cannot merge a work item into itself")
         try:
-            source = svc.get_work_item_detail(work_item_id, tenant_id)
-            svc.get_work_item_detail(payload.target_work_item_id, tenant_id)
-        except KeyError as exc:
+            result = run_merge(
+                service=svc,
+                engine=request.app.state.transitions,
+                store=request.app.state.store,
+                tenant_id=tenant_id,
+                work_item_id=work_item_id,
+                target_work_item_id=payload.target_work_item_id,
+                actor=payload.actor,
+                reason=payload.reason,
+                idempotency_key=payload.idempotency_key,
+                credential=MergeCredential(
+                    authenticated_credential=getattr(
+                        request.state, "auth_identity", "unknown"
+                    ),
+                    auth_method=getattr(request.state, "auth_method", "unknown"),
+                    trace_id=request.headers.get("X-Request-ID")
+                    or f"merge_{uuid.uuid4().hex[:12]}",
+                ),
+                fire=lambda event, payload: _fire_webhooks(
+                    request.app.state, event, payload
+                ),
+            )
+        except MergeNotFound as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
-        engine: TransitionEngine = request.app.state.transitions
-        store: SQLiteStore = request.app.state.store
-        reason = payload.reason or f"merged into {payload.target_work_item_id}"
-        key = payload.idempotency_key
-        previous_state = source.work_item.status
-
-        def evidence(item: Any, replay: bool) -> dict[str, Any]:
-            return {
-                "actor": payload.actor,
-                "authenticated_credential": getattr(request.state, "auth_identity", "unknown"),
-                "tenant_id": tenant_id,
-                "source_work_item_id": work_item_id,
-                "target_work_item_id": payload.target_work_item_id,
-                "reason": reason,
-                "previous_state": previous_state,
-                "resulting_state": item["status"] if isinstance(item, dict) else item.status,
-                "idempotency_key": key,
-                "idempotent_replay": replay,
-                "decided_at": utc_now().isoformat(),
-                "auth_method": getattr(request.state, "auth_method", "unknown"),
-                "trace_id": request.headers.get("X-Request-ID") or f"merge_{uuid.uuid4().hex[:12]}",
-            }
-
-        def respond(item: Any, replay: bool) -> dict[str, Any]:
-            encoded = jsonable_encoder(asdict(item)) if not isinstance(item, dict) else item
-            encoded["merged_into_work_item_id"] = payload.target_work_item_id
-            return {"work_item": encoded, "evidence": evidence(encoded, replay)}
-
-        # Cross-restart idempotency: a recorded key decides before any mutation.
-        # A key used for a DIFFERENT merge is a conflict; otherwise the
-        # (source, reason) match below decides replay. A retry carrying a new
-        # key (e.g. UI timeout retry) is still the same operation → 200.
-        if key:
-            for prior in store.find_transition_by_idempotency_key(key):
-                if prior.work_item_id != work_item_id or prior.reason != reason:
-                    raise HTTPException(status_code=409, detail="idempotency key already used for a different merge")
-        if previous_state == "CANCELLED":
-            last = engine.last_transition(work_item_id)
-            if last is not None and last.to_state == "CANCELLED" and last.reason == reason:
-                return respond(source.work_item, replay=True)
-            raise HTTPException(status_code=409, detail="work item already cancelled for another reason")
-        try:
-            item = engine.cancel(work_item_id, actor=payload.actor, reason=reason, idempotency_key=key)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="work item not found") from exc
-        except ValueError as exc:
+        except MergeConflict as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except MergeInvalid as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        result = respond(item, replay=False)
-        _fire_webhooks(request.app.state, "work_item.merged", jsonable_encoder(result))
-        return result
+        return result_as_dict(result)
 
-    @router.post("/work-items/{work_item_id}/publish", status_code=201, dependencies=[Depends(auth)])
+    @router.post(
+        "/work-items/{work_item_id}/publish",
+        status_code=201,
+        dependencies=[Depends(auth)],
+    )
     def publish_work_item(
         work_item_id: str,
         payload: PublishRequest,
@@ -1061,13 +1151,17 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     ):
         pub: Publisher | None = request.app.state.publisher
         if pub is None:
-            raise HTTPException(status_code=503, detail="no publisher destinations configured")
+            raise HTTPException(
+                status_code=503, detail="no publisher destinations configured"
+            )
         try:
             detail = svc.get_work_item_detail(work_item_id, tenant_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="work item not found") from exc
         try:
-            receipt = pub.publish(payload.destination, detail.work_item, detail.observations)
+            receipt = pub.publish(
+                payload.destination, detail.work_item, detail.observations
+            )
         except KeyError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except RuntimeError as exc:
@@ -1121,7 +1215,14 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "version": "0.2.0",
             "build": "production",
             "status": "active",
-            "features": ["adapters", "policies", "transitions", "publishers", "evidence", "metrics"]
+            "features": [
+                "adapters",
+                "policies",
+                "transitions",
+                "publishers",
+                "evidence",
+                "metrics",
+            ],
         }
 
     @router.get("/usage", dependencies=[Depends(auth)])
@@ -1136,7 +1237,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         }
 
     @router.post("/tasks/submit", dependencies=[Depends(auth)])
-    def submit_task(request: Request, name: str = Body(...), args: list = Body(default=[]), kwargs: dict = Body(default={})):
+    def submit_task(
+        request: Request,
+        name: str = Body(...),
+        args: list = Body(default=[]),
+        kwargs: dict = Body(default={}),
+    ):
         """Submit a background task."""
         queue = request.app.state.task_queue
         task = queue.submit(name, *args, **kwargs)
@@ -1178,7 +1284,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     @router.get("/webhooks/stats", dependencies=[Depends(auth)])
     def webhook_stats(request: Request):
         """Get webhook delivery statistics."""
-        stats = getattr(request.app.state, "webhook_stats", {"delivered": 0, "failed": 0})
+        stats = getattr(
+            request.app.state, "webhook_stats", {"delivered": 0, "failed": 0}
+        )
         webhooks = getattr(request.app.state, "webhooks", {})
         return {
             "delivery": stats,
@@ -1192,10 +1300,15 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         limiter: RateLimiter = request.app.state.rate_limiter
         if client_id:
             return limiter.get_usage(client_id)
-        return {"default_limit": limiter.default_limit, "key_count": len(limiter.key_limits)}
+        return {
+            "default_limit": limiter.default_limit,
+            "key_count": len(limiter.key_limits),
+        }
 
     @router.post("/rate-limit", dependencies=[Depends(auth), Depends(require_admin)])
-    def set_rate_limit(request: Request, key: str = Body(...), limit: int = Body(..., ge=1, le=10000)):
+    def set_rate_limit(
+        request: Request, key: str = Body(...), limit: int = Body(..., ge=1, le=10000)
+    ):
         """Set a custom rate limit for an API key."""
         limiter: RateLimiter = request.app.state.rate_limiter
         limiter.set_key_limit(key, limit)
@@ -1210,16 +1323,17 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     def monitoring(request: Request):
         """Comprehensive monitoring endpoint with system metrics."""
         import psutil
+
         recorder: MetricsRecorder = request.app.state.metrics
-        
+
         # System metrics
         cpu_percent = psutil.cpu_percent(interval=0.1)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
-        
+
         # Service metrics
         service_metrics = recorder.snapshot()
-        
+
         return {
             "system": {
                 "cpu_percent": cpu_percent,
@@ -1231,9 +1345,8 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "disk_total_gb": round(disk.total / (1024**3), 2),
             },
             "service": service_metrics,
-            "timestamp": datetime.now(UTC).isoformat() + "Z"
+            "timestamp": datetime.now(UTC).isoformat() + "Z",
         }
-
 
     @router.get("/tenants", dependencies=[Depends(auth)])
     def list_tenants(request: Request):
@@ -1243,10 +1356,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             rows = store._db.execute(
                 "SELECT tenant_id, COUNT(*) as cnt FROM intake_work_items GROUP BY tenant_id ORDER BY tenant_id"
             ).fetchall()
-        tenants = [
-            {"tenant_id": row[0], "work_item_count": row[1]}
-            for row in rows
-        ]
+        tenants = [{"tenant_id": row[0], "work_item_count": row[1]} for row in rows]
         return {"tenants": tenants, "count": len(tenants)}
 
     @router.get("/work-items/{work_item_id}/transitions", dependencies=[Depends(auth)])
@@ -1268,7 +1378,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                     "id": t.id,
                     "from_status": t.from_state,
                     "to_status": t.to_state,
-                    "action": "approve" if t.to_state == "APPROVED" else t.to_state.lower(),
+                    "action": "approve"
+                    if t.to_state == "APPROVED"
+                    else t.to_state.lower(),
                     "actor": t.actor,
                     "reason": t.reason,
                     "created_at": t.at.isoformat() if t.at else None,
@@ -1296,7 +1408,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "count": len(publications),
         }
 
-    @router.get("/work-items/{work_item_id}/execution-status", dependencies=[Depends(auth)])
+    @router.get(
+        "/work-items/{work_item_id}/execution-status", dependencies=[Depends(auth)]
+    )
     def get_execution_status(
         work_item_id: str,
         request: Request,
@@ -1312,9 +1426,13 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if item is None:
             raise HTTPException(status_code=404, detail="work item not found")
         publications = store.publications_for_work_item(work_item_id)
-        works_pubs = [p for p in publications if p.destination == "works" and p.external_id]
+        works_pubs = [
+            p for p in publications if p.destination == "works" and p.external_id
+        ]
         if not works_pubs:
-            raise HTTPException(status_code=404, detail="work item not published to works")
+            raise HTTPException(
+                status_code=404, detail="work item not published to works"
+            )
         pub: Publisher | None = request.app.state.publisher
         works_pub: WorksPublisher | None = None
         if isinstance(pub, PublishRouter):
@@ -1324,11 +1442,15 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         elif isinstance(pub, WorksPublisher):
             works_pub = pub
         if works_pub is None:
-            raise HTTPException(status_code=503, detail="works destination not configured")
+            raise HTTPException(
+                status_code=503, detail="works destination not configured"
+            )
         latest = works_pubs[-1]
         latest_external_id = latest.external_id
         if not latest_external_id:
-            raise HTTPException(status_code=404, detail="work item not published to works")
+            raise HTTPException(
+                status_code=404, detail="work item not published to works"
+            )
         try:
             status_payload = works_pub.get_work_status(latest_external_id)
         except KeyError as exc:
@@ -1355,8 +1477,10 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         items = svc.list_work_items(tenant_id, limit=1000)
         # Simple text search in title and summary
         results = [
-            item for item in items
-            if q.lower() in (item.title or "").lower() or q.lower() in (item.summary or "").lower()
+            item
+            for item in items
+            if q.lower() in (item.title or "").lower()
+            or q.lower() in (item.summary or "").lower()
         ]
         return {
             "query": q,
@@ -1393,8 +1517,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "external_id": row["external_id"],
                 "actor": row["actor"],
                 "text": row["text"],
-                "occurred_at": _dt(row["occurred_at"]).isoformat() if row["occurred_at"] else None,
-                "created_at": _dt(row["created_at"]).isoformat() if row["created_at"] else None,
+                "occurred_at": _dt(row["occurred_at"]).isoformat()
+                if row["occurred_at"]
+                else None,
+                "created_at": _dt(row["created_at"]).isoformat()
+                if row["created_at"]
+                else None,
             }
             for row in rows
         ]
@@ -1445,7 +1573,10 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "allow_works": policy.allow_works,
         }
 
-    @router.post("/tenants/{tenant_id}/policy", dependencies=[Depends(auth), Depends(require_admin)])
+    @router.post(
+        "/tenants/{tenant_id}/policy",
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
     def update_tenant_policy(
         tenant_id: str,
         request: Request,
@@ -1464,14 +1595,42 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         existing = policy_store.get(tenant_id)
 
         # Merge with existing
-        sources = set(allowed_sources) if allowed_sources is not None else (existing.allowed_sources if existing else set())
-        destinations = set(allowed_destinations) if allowed_destinations is not None else (existing.allowed_destinations if existing else None)
-        max_wi = max_work_items if max_work_items is not None else (existing.max_work_items if existing else 100)
+        sources = (
+            set(allowed_sources)
+            if allowed_sources is not None
+            else (existing.allowed_sources if existing else set())
+        )
+        destinations = (
+            set(allowed_destinations)
+            if allowed_destinations is not None
+            else (existing.allowed_destinations if existing else None)
+        )
+        max_wi = (
+            max_work_items
+            if max_work_items is not None
+            else (existing.max_work_items if existing else 100)
+        )
         priority = max_priority or (existing.max_priority if existing else "high")
-        works = allow_works if allow_works is not None else (existing.allow_works if existing else False)
-        threshold = dedupe_threshold if dedupe_threshold is not None else (existing.dedupe_threshold if existing else 0.72)
-        auto_create = auto_create_work_items if auto_create_work_items is not None else (existing.auto_create_work_items if existing else True)
-        require_approval = require_approval_for_promotion if require_approval_for_promotion is not None else (existing.require_approval_for_promotion if existing else True)
+        works = (
+            allow_works
+            if allow_works is not None
+            else (existing.allow_works if existing else False)
+        )
+        threshold = (
+            dedupe_threshold
+            if dedupe_threshold is not None
+            else (existing.dedupe_threshold if existing else 0.72)
+        )
+        auto_create = (
+            auto_create_work_items
+            if auto_create_work_items is not None
+            else (existing.auto_create_work_items if existing else True)
+        )
+        require_approval = (
+            require_approval_for_promotion
+            if require_approval_for_promotion is not None
+            else (existing.require_approval_for_promotion if existing else True)
+        )
 
         policy = TenantPolicy(
             allowed_sources=sources,
@@ -1497,7 +1656,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 max_priority=priority,
                 dedupe_threshold=threshold,
                 allow_works=works,
-                allowed_destinations=list(destinations) if destinations is not None else None,
+                allowed_destinations=list(destinations)
+                if destinations is not None
+                else None,
                 require_approval_for_promotion=require_approval,
             )
             persisted = True
@@ -1513,7 +1674,10 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         policies = store.list_tenant_policies()
         return {"policies": policies, "count": len(policies)}
 
-    @router.delete("/tenants/{tenant_id}/policy", dependencies=[Depends(auth), Depends(require_admin)])
+    @router.delete(
+        "/tenants/{tenant_id}/policy",
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
     def delete_persisted_policy(tenant_id: str, request: Request):
         """Delete a persisted tenant policy."""
         store: SQLiteStore = request.app.state.store
@@ -1619,19 +1783,23 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         for item_id in payload.work_item_ids:
             item = store.get_work_item(item_id, payload.tenant_id)
             if item is None:
-                items.append({
-                    "id": item_id,
-                    "status": "NOT_FOUND",
-                    "title": None,
-                    "priority": None,
-                })
+                items.append(
+                    {
+                        "id": item_id,
+                        "status": "NOT_FOUND",
+                        "title": None,
+                        "priority": None,
+                    }
+                )
             else:
-                items.append({
-                    "id": item.id,
-                    "status": item.status,
-                    "title": item.title,
-                    "priority": item.priority,
-                })
+                items.append(
+                    {
+                        "id": item.id,
+                        "status": item.status,
+                        "title": item.title,
+                        "priority": item.priority,
+                    }
+                )
         return {"items": items, "count": len(items)}
 
     @router.post(
@@ -1639,7 +1807,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         status_code=200,
         dependencies=[Depends(auth)],
     )
-    async def autonomy_evaluate(request: Request, payload: AutonomyEvaluateRequest) -> dict[str, Any]:
+    async def autonomy_evaluate(
+        request: Request, payload: AutonomyEvaluateRequest
+    ) -> dict[str, Any]:
         """Evaluate a bounded autonomous-execution proposal, fail-closed.
 
         This endpoint NEVER executes, approves, merges, retries, rolls back, or
@@ -1665,7 +1835,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if not request.app.state.rate_limiter.is_allowed(
             f"autonomy:{auth_method}", "/v1/autonomy/decisions/evaluate"
         ):
-            raise HTTPException(status_code=429, detail="Autonomy evaluation rate limit exceeded")
+            raise HTTPException(
+                status_code=429, detail="Autonomy evaluation rate limit exceeded"
+            )
 
         evaluation = evaluate_autonomy(
             AutonomyEvaluationInput(
@@ -1739,20 +1911,24 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         query += " ORDER BY evaluated_at DESC LIMIT ?"
         params.append(limit)
         rows = store._db.execute(query, params).fetchall()
-        columns = [desc[0] for desc in store._db.execute("SELECT * FROM autonomy_decisions LIMIT 0").description]
+        columns = [
+            desc[0]
+            for desc in store._db.execute(
+                "SELECT * FROM autonomy_decisions LIMIT 0"
+            ).description
+        ]
         return {
             "schema": "aftergraph.autonomy-decision-history/1.0",
             "count": len(rows),
             "decisions": [dict(zip(columns, row, strict=True)) for row in rows],
         }
 
-
     # --- Detailed Health Check ---
     @app.get("/healthz/detailed")
     def healthz_detailed(request: Request):
         """Detailed health check with dependency checks."""
         checks = {}
-        
+
         # Database check
         try:
             store: SQLiteStore = request.app.state.store
@@ -1760,13 +1936,13 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             checks["database"] = {"status": "ok", "message": "SQLite accessible"}
         except Exception as e:
             checks["database"] = {"status": "error", "message": str(e)}
-        
+
         # Store check
         try:
             checks["store"] = {"status": "ok", "message": "Store operational"}
         except Exception as e:
             checks["store"] = {"status": "error", "message": str(e)}
-        
+
         all_ok = all(c["status"] == "ok" for c in checks.values())
         return {
             "status": "healthy" if all_ok else "degraded",
@@ -1795,18 +1971,22 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "uptime_seconds": 0,  # Would need to track startup time
         }
 
-
     # --- Dashboard ---
     @app.get("/dashboard")
     def dashboard(request: Request):
         """Simple HTML dashboard showing work item overview."""
         from fastapi.responses import HTMLResponse
+
         store: SQLiteStore = request.app.state.store
 
         # Gather stats
         with store._lock:
-            total_obs = store._db.execute("SELECT COUNT(*) FROM intake_observations").fetchone()[0]
-            total_wi = store._db.execute("SELECT COUNT(*) FROM intake_work_items").fetchone()[0]
+            total_obs = store._db.execute(
+                "SELECT COUNT(*) FROM intake_observations"
+            ).fetchone()[0]
+            total_wi = store._db.execute(
+                "SELECT COUNT(*) FROM intake_work_items"
+            ).fetchone()[0]
             by_status = store._db.execute(
                 "SELECT status, COUNT(*) FROM intake_work_items GROUP BY status"
             ).fetchall()
@@ -1816,11 +1996,19 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             by_priority = store._db.execute(
                 "SELECT priority, COUNT(*) FROM intake_work_items GROUP BY priority"
             ).fetchall()
-            total_pubs = store._db.execute("SELECT COUNT(*) FROM intake_publications").fetchone()[0]
+            total_pubs = store._db.execute(
+                "SELECT COUNT(*) FROM intake_publications"
+            ).fetchone()[0]
 
-        status_rows = "".join(f"<tr><td>{r[0]}</td><td>{r[1]}</td></tr>" for r in by_status)
-        tenant_rows = "".join(f"<tr><td>{r[0]}</td><td>{r[1]}</td></tr>" for r in by_tenant)
-        priority_rows = "".join(f"<tr><td>{r[0]}</td><td>{r[1]}</td></tr>" for r in by_priority)
+        status_rows = "".join(
+            f"<tr><td>{r[0]}</td><td>{r[1]}</td></tr>" for r in by_status
+        )
+        tenant_rows = "".join(
+            f"<tr><td>{r[0]}</td><td>{r[1]}</td></tr>" for r in by_tenant
+        )
+        priority_rows = "".join(
+            f"<tr><td>{r[0]}</td><td>{r[1]}</td></tr>" for r in by_priority
+        )
 
         html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -1860,7 +2048,6 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
 </body></html>"""
         return HTMLResponse(content=html)
 
-
     # --- WebSocket for real-time updates ---
 
     async def ws_heartbeat_loop():
@@ -1889,18 +2076,26 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             while True:
                 data = await websocket.receive_text()
                 if data == "ping":
-                    await websocket.send_json({"type": "pong", "timestamp": time.time()})
+                    await websocket.send_json(
+                        {"type": "pong", "timestamp": time.time()}
+                    )
                 elif data == "stats":
-                    await websocket.send_json({
-                        "type": "stats",
-                        "connected_clients": len(ws_clients),
-                    })
+                    await websocket.send_json(
+                        {
+                            "type": "stats",
+                            "connected_clients": len(ws_clients),
+                        }
+                    )
         except Exception:
             ws_clients.discard(websocket)
             ws_last_heartbeat.pop(id(websocket), None)
 
     # --- Webhook Management ---
-    @router.post("/webhooks", status_code=201, dependencies=[Depends(auth), Depends(require_admin)])
+    @router.post(
+        "/webhooks",
+        status_code=201,
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
     def register_webhook(
         request: Request,
         url: str = Body(..., min_length=1),
@@ -1909,12 +2104,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     ):
         """Register a webhook for event notifications."""
         from urllib.parse import urlparse
-        
+
         # Validate URL
         parsed = urlparse(url)
         if not parsed.scheme or not parsed.netloc:
             raise HTTPException(status_code=422, detail="Invalid webhook URL")
-        
+
         webhook_id = f"wh_{uuid.uuid4().hex}"
         webhook = {
             "id": webhook_id,
@@ -1924,12 +2119,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "created_at": datetime.now(UTC).isoformat() + "Z",
             "active": True,
         }
-        
+
         # Store in app state
         if not hasattr(request.app.state, "webhooks"):
             request.app.state.webhooks = {}
         request.app.state.webhooks[webhook_id] = webhook
-        
+
         return webhook
 
     @router.get("/webhooks", dependencies=[Depends(auth)])
@@ -1941,7 +2136,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "count": len(webhooks),
         }
 
-    @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(auth), Depends(require_admin)])
+    @router.delete(
+        "/webhooks/{webhook_id}", dependencies=[Depends(auth), Depends(require_admin)]
+    )
     def delete_webhook(
         webhook_id: str,
         request: Request,
@@ -1954,7 +2151,11 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         return {"status": "deleted", "id": webhook_id}
 
     # --- API Key Management (DB-backed) ---
-    @router.post("/api-keys", status_code=201, dependencies=[Depends(auth), Depends(require_admin)])
+    @router.post(
+        "/api-keys",
+        status_code=201,
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
     def create_api_key(
         request: Request,
         name: str = Body(..., min_length=1, max_length=128),
@@ -1968,6 +2169,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         explicit tenant, matching historical behavior.
         """
         import hashlib
+
         key_id = f"key_{uuid.uuid4().hex[:16]}"
         api_key = f"ak_{uuid.uuid4().hex}"
         prefix = api_key[:12]
@@ -2007,10 +2209,15 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         keys = store.list_api_keys()
         return {"keys": keys, "count": len(keys)}
 
-    @router.post("/api-keys/{key_id}/rotate", status_code=200, dependencies=[Depends(auth), Depends(require_admin)])
+    @router.post(
+        "/api-keys/{key_id}/rotate",
+        status_code=200,
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
     def rotate_api_key(key_id: str, request: Request):
         """Rotate an API key: deactivate old, create new."""
         import hashlib
+
         store: SQLiteStore = request.app.state.store
         keys = store.list_api_keys()
         old_key = next((k for k in keys if k["id"] == key_id), None)
@@ -2033,7 +2240,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
 
         # Audit log
         audit: AuditLog = request.app.state.audit_log
-        audit.record("api_key.rotated", actor="bearer", target=f"key:{key_id}", details={"new_id": new_key_id})
+        audit.record(
+            "api_key.rotated",
+            actor="bearer",
+            target=f"key:{key_id}",
+            details={"new_id": new_key_id},
+        )
 
         return {
             "old_id": key_id,
@@ -2045,7 +2257,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "_warning": "Store this key securely. It will not be shown again.",
         }
 
-    @router.delete("/api-keys/{key_id}", dependencies=[Depends(auth), Depends(require_admin)])
+    @router.delete(
+        "/api-keys/{key_id}", dependencies=[Depends(auth), Depends(require_admin)]
+    )
     def revoke_api_key(key_id: str, request: Request):
         """Revoke (deactivate) an API key."""
         store: SQLiteStore = request.app.state.store
@@ -2083,8 +2297,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                     "count": len(times),
                     "avg_ms": round(sum(times) / len(times) * 1000, 2),
                     "p50_ms": round(sorted_times[len(sorted_times) // 2] * 1000, 2),
-                    "p95_ms": round(sorted_times[int(len(sorted_times) * 0.95)] * 1000, 2),
-                    "p99_ms": round(sorted_times[int(len(sorted_times) * 0.99)] * 1000, 2),
+                    "p95_ms": round(
+                        sorted_times[int(len(sorted_times) * 0.95)] * 1000, 2
+                    ),
+                    "p99_ms": round(
+                        sorted_times[int(len(sorted_times) * 0.99)] * 1000, 2
+                    ),
                     "max_ms": round(max(times) * 1000, 2),
                 }
         return stats
@@ -2119,7 +2337,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         version = getattr(request.app.state, "migration_version", 0)
         return {"current_version": version}
 
-    @router.post("/migrations/run", dependencies=[Depends(auth), Depends(require_admin)])
+    @router.post(
+        "/migrations/run", dependencies=[Depends(auth), Depends(require_admin)]
+    )
     def run_migrations_endpoint(request: Request):
         """Run pending migrations."""
         store: SQLiteStore = request.app.state.store
@@ -2138,7 +2358,9 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
     ):
         """Query audit log entries."""
         audit: AuditLog = request.app.state.audit_log
-        return {"entries": audit.query(event=event, actor=actor, target=target, limit=limit)}
+        return {
+            "entries": audit.query(event=event, actor=actor, target=target, limit=limit)
+        }
 
     @router.get("/audit/stats", dependencies=[Depends(auth)])
     def audit_stats(request: Request):
@@ -2151,10 +2373,16 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Wie by Aftergraph (Work Intelligence Engine)")
+    parser = argparse.ArgumentParser(
+        description="Wie by Aftergraph (Work Intelligence Engine)"
+    )
     parser.add_argument("--host", default=os.getenv("AFTERGRAPH_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087")))
-    parser.add_argument("--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087"))
+    )
+    parser.add_argument(
+        "--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db")
+    )
     args = parser.parse_args()
     uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port)
 
