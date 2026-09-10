@@ -46,6 +46,17 @@ from .exceptions import WorkIntelligenceError
 from .metrics import MetricsRecorder
 from .migrations import run_migrations
 from .models import ObservationInput, Publication, utc_now
+from .pocket import (
+    PocketAdapter,
+    PocketDuplicate,
+    PocketRejected,
+    PocketReplay,
+    PocketStore,
+    filter_withdrawn_pocket_rows,
+    mcp_answer,
+    resolve_pocket_secret,
+    verify_pocket_signature,
+)
 from .policy import PolicyStore, TenantPolicy
 from .publishers import Publisher, PublishRouter, WorksPublisher, publisher_from_env
 from .request_logger import RequestLogger
@@ -493,6 +504,7 @@ def create_app(
         migration_result = run_migrations(connection=store._db)
         app.state.migration_version = migration_result["current_version"]
         app.state.service = WorkIntelligenceService(store, policy_store=configured_policy_store)
+        app.state.pocket_store = PocketStore(store)
         app.state.policy_store = configured_policy_store
         app.state.transitions = TransitionEngine(store, policy_store=configured_policy_store)
         app.state.publisher = configured_publisher
@@ -783,6 +795,176 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             },
         })
 
+    @app.post("/v1/webhook/pocket", include_in_schema=True)
+    async def pocket_webhook(request: Request) -> JSONResponse:
+        """Inbound Pocket webhook: event-plane signal guard.
+
+        Verifies the tenant-scoped HMAC-SHA256 signature over the raw body
+        (fail-closed 401), enforces replay protection on delivery_id (409),
+        idempotency-key dedupe (accept-once 200), per-conversation sequence
+        high-water marks (stale 202, never resurrecting), edit supersession
+        with preserved lineage, and deletion tombstones (withdrawn from reads,
+        audit retained). Webhooks are signals only and never become
+        reconciliation truth.
+        """
+        raw = await request.body()
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
+        if not isinstance(payload, dict):
+            return JSONResponse(status_code=400, content={"detail": "invalid payload"})
+
+        tenant_id = payload.get("tenant_id")
+        if not tenant_id:
+            return JSONResponse(
+                status_code=400, content={"detail": "tenant_id is required"}
+            )
+        secret = resolve_pocket_secret(tenant_id)
+        signature = request.headers.get("X-Pocket-Signature")
+        if not verify_pocket_signature(secret, raw, signature):
+            return JSONResponse(
+                status_code=401, content={"detail": "invalid signature"}
+            )
+
+        pocket_store: PocketStore = request.app.state.pocket_store
+        service: WorkIntelligenceService = request.app.state.service
+        store: SQLiteStore = request.app.state.store
+        delivery_id = payload.get("delivery_id")
+        if not delivery_id:
+            return JSONResponse(
+                status_code=400, content={"detail": "delivery_id is required"}
+            )
+        idempotency_key = payload.get("idempotency_key")
+        try:
+            sequence_number = int(payload.get("sequence_number") or 0)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                status_code=400, content={"detail": "invalid sequence_number"}
+            )
+        source_ref = payload.get("source_ref") or ""
+        conversation_id = payload.get("conversation_id") or source_ref or delivery_id
+
+        try:
+            pocket_store.register_delivery(
+                tenant_id, delivery_id, idempotency_key, sequence_number, source_ref
+            )
+        except PocketReplay as exc:
+            return JSONResponse(
+                status_code=409,
+                content={"detail": exc.reason, "code": exc.code},
+            )
+        except PocketDuplicate as exc:
+            original_ref = (
+                pocket_store.source_ref_for_delivery(
+                    tenant_id, exc.original_delivery_id or ""
+                )
+                if exc.original_delivery_id
+                else None
+            )
+            original_obs = (
+                store.get_observation_by_external(
+                    tenant_id, "pocket", f"pocket:{original_ref}"
+                )
+                if original_ref
+                else None
+            )
+            return JSONResponse(status_code=200, content={
+                "status": "deduped",
+                "delivery_id": delivery_id,
+                "observations_created": 0,
+                "materialized_observations": 1 if original_obs is not None else 0,
+                "observation_id": original_obs.id if original_obs is not None else None,
+                "webhook_claimed_as_truth": False,
+            })
+
+        if payload.get("tombstone"):
+            # Deletion wins over sequence staleness: content is withdrawn from
+            # reads while audit evidence is retained (tombstone semantics).
+            try:
+                observations = list(
+                    PocketAdapter().observations(payload, pocket_store)
+                )
+            except PocketRejected as exc:
+                return JSONResponse(
+                    status_code=422,
+                    content={"detail": exc.reason, "code": exc.code},
+                )
+            voided = [o for o in observations if o.external_id]
+            pocket_store.apply_tombstone(
+                tenant_id, source_ref, delivery_id, "source_deleted"
+            )
+            pocket_store.apply_sequence(tenant_id, conversation_id, sequence_number)
+            return JSONResponse(status_code=200, content={
+                "status": "tombstoned",
+                "delivery_id": delivery_id,
+                "tombstone": True,
+                "withdrawn_from_reads": True,
+                "audit_retained": True,
+                "voided_observations": len(voided),
+                "webhook_claimed_as_truth": False,
+            })
+
+        supersedes = payload.get("supersedes")
+        fresh = pocket_store.apply_sequence(
+            tenant_id, conversation_id, sequence_number
+        )
+        if not fresh and not supersedes:
+            # Out-of-order delivery: reconcile to current event-plane state.
+            # The higher applied sequence wins; superseded content is not
+            # resurrected and no new observation materializes.
+            return JSONResponse(status_code=202, content={
+                "status": "stale_ignored",
+                "delivery_id": delivery_id,
+                "observations_created": 0,
+                "applied_sequence": pocket_store.applied_sequence(
+                    tenant_id, conversation_id
+                ),
+                "resurrects_superseded_content": False,
+                "webhook_claimed_as_truth": False,
+            })
+
+        try:
+            observations = list(PocketAdapter().observations(payload, pocket_store))
+        except PocketRejected as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": exc.reason, "code": exc.code},
+            )
+        if payload.get("consent_ref") and payload.get("purpose"):
+            pocket_store.attach_consent(
+                tenant_id, payload["consent_ref"], payload["purpose"]
+            )
+        created = 0
+        observation_ids: list[str] = []
+        for obs in observations:
+            result = service.ingest(obs)
+            observation_ids.append(result.observation.id)
+            if result.action != "replayed":
+                created += 1
+        if supersedes:
+            superseded_ref = pocket_store.source_ref_for_delivery(
+                tenant_id, supersedes
+            ) or ""
+            pocket_store.mark_superseded(
+                tenant_id, supersedes, delivery_id, superseded_ref
+            )
+        content: dict[str, Any] = {
+            "status": "ingested",
+            "delivery_id": delivery_id,
+            "observations_created": created,
+            "observation_ids": observation_ids,
+            "applied_sequence": pocket_store.applied_sequence(
+                tenant_id, conversation_id
+            ),
+            "webhook_claimed_as_truth": False,
+        }
+        if supersedes:
+            content["lineage_preserved"] = True
+        return JSONResponse(
+            status_code=201 if created > 0 else 200, content=content
+        )
+
     async def auth(
         request: Request,
         authorization: str | None = Header(default=None),
@@ -910,6 +1092,200 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         encoded = jsonable_encoder(asdict(result))
         _fire_webhooks(request.app.state, "observation.ingested", encoded)
         return JSONResponse(status_code=status, content=encoded)
+
+    @router.post("/pocket/ingest", dependencies=[Depends(auth)])
+    async def pocket_ingest(request: Request) -> JSONResponse:
+        """REST canonical ingest for Pocket records (reconciliation plane).
+
+        Validates the pocket-source/0.1 contract, maps to Wie Observations
+        with derivation lineage, and hydrates event-plane state toward
+        canonical data. Pocket output stays observation only with zero
+        execution authority.
+        """
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(status_code=400, detail="invalid JSON")
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid payload")
+        pocket_store: PocketStore = request.app.state.pocket_store
+        svc: WorkIntelligenceService = request.app.state.service
+        try:
+            observations = list(PocketAdapter().observations(payload, pocket_store))
+        except PocketRejected as exc:
+            return JSONResponse(
+                status_code=422,
+                content={"detail": exc.reason, "code": exc.code},
+            )
+        if payload.get("consent_ref") and payload.get("purpose"):
+            pocket_store.attach_consent(
+                payload["tenant_id"], payload["consent_ref"], payload["purpose"]
+            )
+        created = 0
+        observation_ids: list[str] = []
+        injected = False
+        for obs in observations:
+            if obs.metadata.get("injection_contained"):
+                injected = True
+            result = svc.ingest(obs)
+            observation_ids.append(result.observation.id)
+            if result.action != "replayed":
+                created += 1
+        return JSONResponse(
+            status_code=201 if created > 0 else 200,
+            content={
+                "status": "ingested",
+                "observations_created": created,
+                "observation_ids": observation_ids,
+                "reconciles_to_canonical": True,
+                "webhook_claimed_as_truth": False,
+                "execution_authority": "none",
+                "injection_contained": injected,
+            },
+        )
+
+    @router.get("/pocket/observations", dependencies=[Depends(auth)])
+    def pocket_observations(
+        request: Request,
+        tenant_id: str = Query(min_length=1, max_length=128),
+        limit: int = Query(default=100, ge=1, le=1000),
+        projection: str | None = Query(default=None, max_length=32),
+    ):
+        """Reconciled Pocket reads: tombstoned/superseded/revoked content is
+        withdrawn while audit rows persist. Revoked derivations are never
+        stale-served as current."""
+        store: SQLiteStore = request.app.state.store
+        pocket_store: PocketStore = request.app.state.pocket_store
+        with store._lock:
+            rows = store._db.execute(
+                "SELECT * FROM intake_observations"
+                " WHERE tenant_id = ? AND source = 'pocket'"
+                " ORDER BY created_at DESC LIMIT ?",
+                (tenant_id, limit),
+            ).fetchall()
+        observations = []
+        for row in filter_withdrawn_pocket_rows(store, tenant_id, list(rows)):
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except ValueError:
+                metadata = {}
+            observations.append({
+                "id": row["id"],
+                "tenant_id": row["tenant_id"],
+                "source": row["source"],
+                "external_id": row["external_id"],
+                "actor": row["actor"],
+                "text": row["text"],
+                "metadata": metadata,
+                "occurred_at": _dt(row["occurred_at"]).isoformat() if row["occurred_at"] else None,
+                "created_at": _dt(row["created_at"]).isoformat() if row["created_at"] else None,
+            })
+        projection_state = pocket_store.recompute_projection(tenant_id)
+        return {
+            "observations": observations,
+            "count": len(observations),
+            "projection_recomputed": projection_state["projection_recomputed"],
+            "stale_served_as_current": projection_state["stale_served_as_current"],
+        }
+
+    @router.post(
+        "/pocket/consent/revoke",
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
+    def pocket_consent_revoke(request: Request, payload: dict = Body(...)):
+        """Revoke Pocket consent: invalidate downstream use per provenance and
+        recompute derived state. Historical audit/evidence is never rewritten.
+        """
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid payload")
+        tenant_id = payload.get("tenant_id")
+        consent_ref = payload.get("consent_ref")
+        if not tenant_id or not consent_ref:
+            raise HTTPException(
+                status_code=400, detail="tenant_id and consent_ref are required"
+            )
+        pocket_store: PocketStore = request.app.state.pocket_store
+        if not pocket_store.revoke_consent(tenant_id, consent_ref):
+            raise HTTPException(status_code=404, detail="consent_ref not found")
+        projection_state = pocket_store.recompute_projection(tenant_id)
+        return {
+            "consent_revoked": True,
+            "downstream_invalidated": True,
+            "audit_rewritten": False,
+            "projection_recomputed": True,
+            "withdrawn_observations": projection_state["withdrawn_observations"],
+            "active_observations": projection_state["active_observations"],
+        }
+
+    @router.post(
+        "/pocket/sources/delete",
+        dependencies=[Depends(auth), Depends(require_admin)],
+    )
+    def pocket_source_delete(request: Request, payload: dict = Body(...)):
+        """Propagate Pocket source deletion with tombstone semantics: content
+        is withdrawn from reads and derivatives while audit is retained."""
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid payload")
+        tenant_id = payload.get("tenant_id")
+        source_ref = payload.get("source_ref")
+        if not tenant_id or not source_ref:
+            raise HTTPException(
+                status_code=400, detail="tenant_id and source_ref are required"
+            )
+        pocket_store: PocketStore = request.app.state.pocket_store
+        pocket_store.apply_tombstone(
+            tenant_id, source_ref, f"delete:{source_ref}", "source_deleted"
+        )
+        return {
+            "source_deleted": True,
+            "deletion_propagated": True,
+            "tombstone": True,
+            "withdrawn_from_reads": True,
+            "audit_retained": True,
+        }
+
+    @router.post("/pocket/mcp/query", dependencies=[Depends(auth)])
+    def pocket_mcp_query(request: Request, payload: dict = Body(...)):
+        """Optional MCP interactive plane over Pocket observations.
+
+        Interactive access reads without ingesting; canonical access is
+        rejected — MCP never supplies canonical data.
+        """
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="invalid payload")
+        tenant_id = payload.get("tenant_id")
+        if not tenant_id:
+            raise HTTPException(status_code=400, detail="tenant_id is required")
+        access_mode = payload.get("access_mode")
+        store: SQLiteStore = request.app.state.store
+        try:
+            records: list[dict[str, Any]] = []
+            if access_mode == "interactive":
+                with store._lock:
+                    rows = store._db.execute(
+                        "SELECT * FROM intake_observations"
+                        " WHERE tenant_id = ? AND source = 'pocket'"
+                        " ORDER BY created_at DESC LIMIT 100",
+                        (tenant_id,),
+                    ).fetchall()
+                for row in filter_withdrawn_pocket_rows(store, tenant_id, list(rows)):
+                    try:
+                        metadata = json.loads(row["metadata_json"] or "{}")
+                    except ValueError:
+                        metadata = {}
+                    records.append({
+                        "id": row["id"],
+                        "external_id": row["external_id"],
+                        "text": row["text"],
+                        "metadata": metadata,
+                    })
+            answered = mcp_answer(records, access_mode)
+        except PocketRejected as exc:
+            return JSONResponse(
+                status_code=403,
+                content={"detail": exc.reason, "code": exc.code},
+            )
+        return {"access_mode": "interactive", "observations": answered}
 
     @router.get("/work-items/{work_item_id}", dependencies=[Depends(auth)])
     def get_work_item(
@@ -1384,6 +1760,10 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
 
         with store._lock:
             rows = store._db.execute(sql, params).fetchall()
+
+        # Pocket connector: tombstoned / superseded / consent-revoked Pocket
+        # observations are withdrawn from reads while audit rows persist.
+        rows = filter_withdrawn_pocket_rows(store, tenant_id, list(rows))
 
         observations = [
             {
