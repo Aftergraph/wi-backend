@@ -118,10 +118,13 @@ CREATE TABLE IF NOT EXISTS api_keys (
     prefix TEXT NOT NULL,
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
-    last_used_at TEXT
+    last_used_at TEXT,
+    tenant_id TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_prefix
 ON api_keys(prefix);
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant
+ON api_keys(tenant_id);
 """
 
 
@@ -256,22 +259,47 @@ class SQLiteStore:
             )
             return cursor.rowcount > 0
 
-    def create_api_key(self, key_id: str, name: str, key_hash: str, prefix: str) -> dict:
-        """Create an API key record."""
+    def create_api_key(
+        self,
+        key_id: str,
+        name: str,
+        key_hash: str,
+        prefix: str,
+        tenant_id: str | None = None,
+    ) -> dict:
+        """Create an API key record, optionally bound to one tenant."""
         now = datetime.now(UTC).isoformat()
+        bound = (tenant_id or "").strip() or None
         with self._lock:
             self._db.execute(
-                """INSERT INTO api_keys (id, name, key_hash, prefix, active, created_at)
-                   VALUES (?, ?, ?, ?, 1, ?)""",
-                (key_id, name, key_hash, prefix, now),
+                """INSERT INTO api_keys (id, name, key_hash, prefix, active, created_at, tenant_id)
+                   VALUES (?, ?, ?, ?, 1, ?, ?)""",
+                (key_id, name, key_hash, prefix, now, bound),
             )
-        return {"id": key_id, "name": name, "prefix": prefix, "active": True, "created_at": now}
+        return {
+            "id": key_id,
+            "name": name,
+            "prefix": prefix,
+            "active": True,
+            "created_at": now,
+            "tenant_id": bound,
+        }
+
+    def get_api_key_binding(self, prefix: str) -> dict | None:
+        """Return id/hash/active/tenant binding for a key prefix, or None."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT id, key_hash, active, tenant_id FROM api_keys WHERE prefix = ?",
+                (prefix,),
+            ).fetchone()
+            return dict(row) if row is not None else None
 
     def list_api_keys(self) -> list[dict]:
         """Return all API key records (without secrets)."""
         with self._lock:
             rows = self._db.execute(
-                "SELECT id, name, prefix, active, created_at, last_used_at FROM api_keys ORDER BY created_at DESC"
+                "SELECT id, name, prefix, active, created_at, last_used_at, tenant_id"
+                " FROM api_keys ORDER BY created_at DESC"
             ).fetchall()
             return [dict(r) for r in rows]
 

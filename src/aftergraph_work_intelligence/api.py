@@ -1959,20 +1959,34 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         request: Request,
         name: str = Body(..., min_length=1, max_length=128),
         permissions: list[str] = Body(default=["read"]),
+        tenant_id: str | None = Body(default=None, max_length=128),
     ):
-        """Create a new API key. Key is only returned once."""
+        """Create a new API key. Key is only returned once.
+
+        Optional tenant_id binds the key to one tenant: bound keys are
+        rejected for every other tenant. Unbound keys keep working with an
+        explicit tenant, matching historical behavior.
+        """
         import hashlib
         key_id = f"key_{uuid.uuid4().hex[:16]}"
         api_key = f"ak_{uuid.uuid4().hex}"
         prefix = api_key[:12]
         key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+        bound = (tenant_id or "").strip() or None
+        if bound is not None and not (1 <= len(bound) <= 128):
+            raise HTTPException(status_code=400, detail="invalid tenant_id")
 
         store: SQLiteStore = request.app.state.store
-        record = store.create_api_key(key_id, name, key_hash, prefix)
+        record = store.create_api_key(key_id, name, key_hash, prefix, tenant_id=bound)
 
         # Audit log
         audit: AuditLog = request.app.state.audit_log
-        audit.record("api_key.created", actor="bearer", target=f"key:{key_id}", details={"name": name})
+        audit.record(
+            "api_key.created",
+            actor="bearer",
+            target=f"key:{key_id}",
+            details={"name": name, "tenant_id": bound},
+        )
 
         return {
             "id": key_id,
@@ -1980,6 +1994,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "key": api_key,
             "prefix": prefix,
             "permissions": permissions,
+            "tenant_id": bound,
             "created_at": record["created_at"],
             "active": True,
             "_warning": "Store this key securely. It will not be shown again.",
@@ -2005,12 +2020,16 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         # Deactivate old
         store.deactivate_api_key(key_id)
 
-        # Create new with same name
+        # Create new with same name and same tenant binding (rotation must
+        # never silently unbind a key).
         new_key_id = f"key_{uuid.uuid4().hex[:16]}"
         api_key = f"ak_{uuid.uuid4().hex}"
         prefix = api_key[:12]
         key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-        store.create_api_key(new_key_id, old_key["name"], key_hash, prefix)
+        bound = old_key.get("tenant_id")
+        store.create_api_key(
+            new_key_id, old_key["name"], key_hash, prefix, tenant_id=bound
+        )
 
         # Audit log
         audit: AuditLog = request.app.state.audit_log
@@ -2022,6 +2041,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "key": api_key,
             "prefix": prefix,
             "name": old_key["name"],
+            "tenant_id": bound,
             "_warning": "Store this key securely. It will not be shown again.",
         }
 

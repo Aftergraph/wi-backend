@@ -8,6 +8,7 @@ dependencies = [
   "uvicorn>=0.48,<0.53",
   "pydantic>=2.13,<3",
   "psutil>=5.9,<8",
+  "mcp>=2.2.0",
 ]
 
 [project.optional-dependencies]
