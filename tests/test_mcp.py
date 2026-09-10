@@ -519,11 +519,21 @@ class TestMcpTransportSecurity:
         )
         settings = mcp_transport_security_from_env()
         assert settings.enable_dns_rebinding_protection is True
-        assert "work-intelligence.aftergraph.org" in settings.allowed_hosts
-        assert "work-intelligence.aftergraph.org:*" in settings.allowed_hosts
-        assert "127.0.0.1:*" in settings.allowed_hosts
-        assert "localhost:*" in settings.allowed_hosts
-        assert "[::1]:*" in settings.allowed_hosts
+        # Exact allowlists: fail closed on any unexpected entry.
+        assert settings.allowed_hosts == [
+            "127.0.0.1:*",
+            "localhost:*",
+            "[::1]:*",
+            "work-intelligence.aftergraph.org",
+            "work-intelligence.aftergraph.org:*",
+        ]
+        assert settings.allowed_origins == [
+            "http://127.0.0.1:*",
+            "http://localhost:*",
+            "http://[::1]:*",
+            "https://work-intelligence.aftergraph.org",
+            "https://work-intelligence.aftergraph.org:*",
+        ]
 
     def test_multiple_hosts_comma_separated(self, monkeypatch):
         monkeypatch.setenv(
@@ -531,9 +541,15 @@ class TestMcpTransportSecurity:
             "work-intelligence.aftergraph.org, 172.17.0.1",
         )
         settings = mcp_transport_security_from_env()
-        assert "172.17.0.1" in settings.allowed_hosts
-        assert "172.17.0.1:*" in settings.allowed_hosts
-        assert "work-intelligence.aftergraph.org:*" in settings.allowed_hosts
+        assert settings.allowed_hosts == [
+            "127.0.0.1:*",
+            "localhost:*",
+            "[::1]:*",
+            "work-intelligence.aftergraph.org",
+            "work-intelligence.aftergraph.org:*",
+            "172.17.0.1",
+            "172.17.0.1:*",
+        ]
 
     def test_wrong_host_rejected_right_host_accepted(
         self, tmp_path, master_token, bearer, monkeypatch
