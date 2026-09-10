@@ -89,8 +89,8 @@ class TestRunMigrations:
         db = tmp_path / "test.db"
         SQLiteStore(db)  # base schema first — the supported path (app lifespan does the same)
         result = run_migrations(db)
-        assert result["current_version"] == 5
-        assert result["total_applied"] == 5
+        assert result["current_version"] == 6
+        assert result["total_applied"] == 6
         assert result["ok"] is True
 
     def test_run_migrations_idempotent(self, tmp_path):

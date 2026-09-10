@@ -5,13 +5,17 @@ import hashlib
 import hmac
 import os
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.routing import Route
+from starlette.types import Receive, Scope, Send
 
 from .api import EVALUATOR_PATH, any_tenant_webhook_secrets
 from .api import create_app as create_core_app
@@ -46,14 +50,18 @@ _CORS_HEADERS = {
 def _parse_origins(raw: str | None) -> tuple[str, ...]:
     if not raw:
         return _DEFAULT_CORS_ORIGINS
-    values = tuple(value.strip().rstrip("/") for value in raw.split(",") if value.strip())
+    values = tuple(
+        value.strip().rstrip("/") for value in raw.split(",") if value.strip()
+    )
     if "*" in values:
         raise ValueError("AFTERGRAPH_CORS_ORIGINS must not contain '*' in secure mode")
     return values
 
 
 def _secure_headers(response: Response) -> None:
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Strict-Transport-Security"] = (
+        "max-age=31536000; includeSubDomains"
+    )
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -136,7 +144,9 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
                     expected = bytes.fromhex(signature[7:])
                 else:
                     expected = bytes.fromhex(signature)
-                computed = hmac.new(self.webhook_secret.encode(), body, hashlib.sha256).digest()
+                computed = hmac.new(
+                    self.webhook_secret.encode(), body, hashlib.sha256
+                ).digest()
                 if hmac.compare_digest(computed, expected):
                     return True
             except Exception:
@@ -177,14 +187,18 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS" and origin:
             if normalized_origin not in self.cors_origins:
                 return self._finalize(
-                    JSONResponse(status_code=403, content={"detail": "CORS origin denied"}),
+                    JSONResponse(
+                        status_code=403, content={"detail": "CORS origin denied"}
+                    ),
                     origin,
                     path,
                 )
             response = Response(status_code=204)
             response.headers["Access-Control-Allow-Origin"] = normalized_origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, DELETE, OPTIONS"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, DELETE, OPTIONS"
+            )
             response.headers["Access-Control-Allow-Headers"] = (
                 "Authorization, Content-Type, X-API-Key, X-Request-ID"
             )
@@ -236,9 +250,13 @@ def create_app(
         if db_path is not None
         else os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db")
     )
-    resolved_token = api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
+    resolved_token = (
+        api_token if api_token is not None else os.getenv("AFTERGRAPH_API_TOKEN")
+    )
     resolved_webhook_secret = (
-        webhook_secret if webhook_secret is not None else os.getenv("AFTERGRAPH_WEBHOOK_SECRET")
+        webhook_secret
+        if webhook_secret is not None
+        else os.getenv("AFTERGRAPH_WEBHOOK_SECRET")
     )
     app = create_core_app(
         db_path=resolved_db_path,
@@ -254,6 +272,70 @@ def create_app(
         cors_origins=_parse_origins(os.getenv("AFTERGRAPH_CORS_ORIGINS")),
         webhook_secret=resolved_webhook_secret,
     )
+    from .mcp_server import (
+        build_mcp_server,
+        make_runtime,
+        mcp_transport_security_from_env,
+    )
+
+    app.state.mcp_master_token = resolved_token
+    # Factory, not a snapshot: application state only fills at startup.
+    # Mounted at /mcp, so the sub-app serves the bare path (else /mcp/mcp).
+    # DNS-rebinding guard: loopback-only when AFTERGRAPH_MCP_PUBLIC_HOST is
+    # unset; when set (comma-separated), those hosts are admitted with the
+    # guard kept ON via explicit transport_security (the SDK would otherwise
+    # silently disable it for any non-loopback host).
+    public_hosts = [
+        h.strip()
+        for h in os.getenv("AFTERGRAPH_MCP_PUBLIC_HOST", "").split(",")
+        if h.strip()
+    ]
+    mcp_host = public_hosts[0] if public_hosts else "127.0.0.1"
+    mcp_app = build_mcp_server(lambda: make_runtime(app)).streamable_http_app(
+        streamable_http_path="/",
+        host=mcp_host,
+        transport_security=mcp_transport_security_from_env(),
+    )
+    app.mount("/mcp", mcp_app)
+
+    class _McpBarePathApp:
+        """Dispatch the bare /mcp path into the mounted sub-app.
+
+        A class (not a function) so Route uses it as a raw ASGI app. The
+        Mount only matches /mcp/… (Starlette answers 307 for the bare
+        path); re-scope exactly like the mount would so strict HTTP
+        clients that do not follow redirects work against /mcp too.
+        """
+
+        def __init__(self, sub_app: Any) -> None:
+            self.sub_app = sub_app
+
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            root_path = scope.get("root_path", "")
+            await self.sub_app(
+                {**scope, "path": "/", "root_path": f"{root_path}/mcp"},
+                receive,
+                send,
+            )
+
+    app.routes.append(
+        Route(
+            "/mcp",
+            endpoint=_McpBarePathApp(mcp_app),
+            methods=["GET", "POST", "DELETE"],
+        )
+    )
+
+    # Starlette never runs a mounted sub-app's lifespan; enter the MCP
+    # session manager's lifespan from the host lifespan instead.
+    core_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def lifespan_with_mcp(parent):
+        async with core_lifespan(parent), mcp_app.router.lifespan_context(mcp_app):
+            yield
+
+    app.router.lifespan_context = lifespan_with_mcp
     return app
 
 
@@ -261,8 +343,12 @@ def main() -> None:
     """Run the fail-closed production application."""
     parser = argparse.ArgumentParser(description="Wie by Aftergraph (secure)")
     parser.add_argument("--host", default=os.getenv("AFTERGRAPH_HOST", "127.0.0.1"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087")))
-    parser.add_argument("--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db"))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("AFTERGRAPH_PORT", "8087"))
+    )
+    parser.add_argument(
+        "--db", default=os.getenv("AFTERGRAPH_DB", "./aftergraph-work-intelligence.db")
+    )
     args = parser.parse_args()
     uvicorn.run(create_app(db_path=args.db), host=args.host, port=args.port)
 

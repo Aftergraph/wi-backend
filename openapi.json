@@ -626,7 +626,7 @@
     "/v1/work-items/{work_item_id}/merge": {
       "post": {
         "summary": "Merge Work Item",
-        "description": "Merge a duplicate candidate into a canonical work item.\n\nponytail: no new state or schema \u2014 the duplicate is audited-cancelled\nwith reason `merged into <target>`, reusing TransitionEngine.cancel.\nBoth items must exist under the same tenant (fail-closed 404\notherwise); replaying the same merge is idempotent 200.",
+        "description": "Merge a duplicate candidate into a canonical work item.\n\nponytail: no new state or schema \u2014 the duplicate is audited-cancelled\nwith reason `merged into <target>`, reusing TransitionEngine.cancel.\nBoth items must exist under the same tenant (fail-closed 404\notherwise); replaying the same merge is idempotent 200.\nThe flow itself lives in merge_kernel.run_merge (shared with MCP).",
         "operationId": "merge_work_item_v1_work_items__work_item_id__merge_post",
         "parameters": [
           {
@@ -3691,7 +3691,7 @@
     "/v1/api-keys": {
       "post": {
         "summary": "Create Api Key",
-        "description": "Create a new API key. Key is only returned once.",
+        "description": "Create a new API key. Key is only returned once.\n\nOptional tenant_id binds the key to one tenant: bound keys are\nrejected for every other tenant. Unbound keys keep working with an\nexplicit tenant, matching historical behavior.",
         "operationId": "create_api_key_v1_api_keys_post",
         "parameters": [
           {
@@ -5083,6 +5083,18 @@
             "default": [
               "read"
             ]
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
           }
         },
         "type": "object",
