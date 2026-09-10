@@ -38,6 +38,33 @@ relying on the SDK default (see `mcp_transport_security_from_env`).
   `/etc/aftergraph/work-intelligence.env` when serving non-loopback.
 - Probes/healthchecks are unchanged (`/healthz` on the main app).
 
+## Connect a client
+
+Point any Streamable-HTTP MCP client at `/mcp` with the credential as
+a header (per-tenant `ak_*` key or master Bearer token):
+
+```json
+{
+  "mcpServers": {
+    "wi": {
+      "url": "https://work-intelligence.aftergraph.org/mcp",
+      "headers": { "Authorization": "Bearer <ak_*_or_master_token>" }
+    }
+  }
+}
+```
+
+Smoke-test without a client:
+
+```bash
+curl -sS -D - -o /dev/null -X POST https://work-intelligence.aftergraph.org/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "Authorization: Bearer $AFTERGRAPH_API_TOKEN" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+# expect 200 + an mcp-session-id header
+```
+
 ## Auth (mirrors the REST rules, never weaker)
 
 - `Authorization: Bearer <AFTERGRAPH_API_TOKEN>` — every explicit tenant,
