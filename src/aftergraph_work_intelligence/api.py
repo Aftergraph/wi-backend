@@ -34,7 +34,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool
 
 from .adapters import GitHubAdapter
 from .audit import AuditLog
@@ -47,6 +47,7 @@ from .metrics import MetricsRecorder
 from .migrations import run_migrations
 from .models import ObservationInput, Publication, utc_now
 from .policy import PolicyStore, TenantPolicy
+from .proactivity import SensingRegistry, SensingRejected
 from .publishers import Publisher, PublishRouter, WorksPublisher, publisher_from_env
 from .request_logger import RequestLogger
 from .service import WorkIntelligenceService
@@ -338,6 +339,30 @@ class AutonomyEvaluateRequest(BaseModel):
     changed_files: list[str] = Field(default_factory=list, max_length=2000)
 
 
+class SensingRequest(BaseModel):
+    """Wie proactivity sensing intake (contract proactivity/0.1, fail-closed)."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    schema_: str = Field(alias="schema", pattern=r"^proactivity/0\.1$")
+    sensing_id: str = Field(min_length=1, max_length=64, pattern=r"^sen_[a-f0-9]{32}$")
+    path: Literal["wie", "runtime", "cron"]
+    native_ref: str = Field(min_length=1, max_length=512)
+    candidate_kind: Literal[
+        "opportunity",
+        "attention_candidate",
+        "commitment_candidate",
+        "observation_update",
+        "finding",
+    ]
+    claims_execution: StrictBool
+    claims_admission: StrictBool
+    admitted_by_tg: StrictBool
+    correlated_paths: list[Literal["wie", "runtime", "cron"]] = Field(min_length=1, max_length=3)
+    asserted_at: str = Field(min_length=1, max_length=64)
+    tenant_id: str = Field(min_length=1, max_length=64, pattern=r"^ten_[a-f0-9]{32}$")
+
+
 _TENANT_WEBHOOK_SECRET_PREFIX = "AFTERGRAPH_WEBHOOK_SECRET_"
 
 
@@ -518,6 +543,10 @@ def create_app(
         log_dir = db_path.parent / "logs"
         request_logger = RequestLogger(log_dir=log_dir)
         app.state.request_logger = request_logger
+
+        # Initialize proactivity sensing registry (process-local, ephemeral:
+        # sensing proposes and never stores authority)
+        app.state.sensing_registry = SensingRegistry()
 
         # Store migration version for health check
         app.state.migration_version = migration_result["current_version"]
@@ -1713,6 +1742,44 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             "authority": evaluation["authority"],
             "blast_radius": evaluation.get("blast_radius", {}),
         }
+
+    @router.post("/sensing", dependencies=[Depends(auth)])
+    def submit_sensing(payload: SensingRequest, request: Request):
+        """Accept a proactivity sensing record, fail-closed.
+
+        This endpoint NEVER executes, admits, dispatches, or persists
+        authority. Accepted records correlate into the process-local
+        sensing registry; the same native signal seen via Wie and Cron
+        dedupes to a single attention candidate. Rejections return
+        accepted=false and store nothing.
+        """
+        registry: SensingRegistry = request.app.state.sensing_registry
+        try:
+            candidate, deduped = registry.register(payload.model_dump(by_alias=True))
+        except SensingRejected as exc:
+            return JSONResponse(
+                status_code=200,
+                content={"accepted": False, "reason": str(exc), "candidate": None, "deduped": False},
+            )
+        if deduped:
+            reason = (
+                "same native signal already registered; correlated and deduped "
+                f"to a single {candidate.candidate_kind}"
+            )
+        else:
+            reason = (
+                f"{candidate.path} signal projected to {candidate.candidate_kind}; "
+                "native meaning preserved; nothing claimed"
+            )
+        return JSONResponse(
+            status_code=200 if deduped else 201,
+            content={
+                "accepted": True,
+                "reason": reason,
+                "candidate": jsonable_encoder(asdict(candidate)),
+                "deduped": deduped,
+            },
+        )
 
     @router.get(
         "/autonomy/decisions/history",
