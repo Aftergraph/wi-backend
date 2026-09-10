@@ -1257,6 +1257,8 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if not tenant_id:
             raise HTTPException(status_code=400, detail="tenant_id is required")
         access_mode = payload.get("access_mode")
+        if not isinstance(access_mode, str):
+            raise HTTPException(status_code=400, detail="access_mode must be a string")
         store: SQLiteStore = request.app.state.store
         try:
             records: list[dict[str, Any]] = []
