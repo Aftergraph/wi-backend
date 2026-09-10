@@ -108,7 +108,7 @@ Mutating data tools and all admin tools write audit rows
 ## Verify
 
 ```bash
-uv run pytest tests/test_mcp.py -q   # 18 tests: surface, gates, transport, replay, admin, evaluate, host-guard, bare-path
-uv run pytest tests/ -q              # full suite
+uv run pytest tests/test_mcp.py   # 18 tests: surface, gates, transport, replay, admin, evaluate, host-guard, bare-path
+uv run pytest tests/              # full suite (addopts already passes -q; do not add another -q or the summary line is suppressed)
 uvx ruff check src/aftergraph_work_intelligence/ tests/test_mcp.py
 ```
