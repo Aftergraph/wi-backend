@@ -686,6 +686,26 @@ CREATE TABLE IF NOT EXISTS pocket_retired_materializations (
     at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, materialization_ref)
 );
+
+CREATE TABLE IF NOT EXISTS pocket_reconciliation_jobs (
+    job_id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    recording_id TEXT NOT NULL,
+    source_delivery_id TEXT NOT NULL,
+    consent_ref TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    max_attempts INTEGER NOT NULL DEFAULT 4,
+    last_error TEXT,
+    result_json TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pocket_reconciliation_status
+ON pocket_reconciliation_jobs(status, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_pocket_reconciliation_active
+ON pocket_reconciliation_jobs(tenant_id, recording_id)
+WHERE status IN ('pending', 'running');
 """
 
 
@@ -799,6 +819,119 @@ class PocketStore:
                 (tenant_id, conversation_id),
             ).fetchone()
         return int(row["applied_sequence"]) if row else 0
+
+    # -- durable REST reconciliation jobs ---------------------------------
+
+    def enqueue_reconciliation(
+        self,
+        tenant_id: str,
+        recording_id: str,
+        source_delivery_id: str,
+        consent_ref: str | None,
+    ) -> tuple[str, bool]:
+        """Create one durable active reconciliation job per recording."""
+        with self._lock:
+            existing = self._db.execute(
+                "SELECT job_id FROM pocket_reconciliation_jobs"
+                " WHERE tenant_id = ? AND recording_id = ?"
+                " AND status IN ('pending', 'running')"
+                " ORDER BY created_at LIMIT 1",
+                (tenant_id, recording_id),
+            ).fetchone()
+            if existing is not None:
+                return str(existing["job_id"]), False
+            job_id = "prj_" + hashlib.sha256(
+                f"{tenant_id}|{recording_id}|{source_delivery_id}".encode()
+            ).hexdigest()[:32]
+            now = _now_iso()
+            self._db.execute(
+                "INSERT INTO pocket_reconciliation_jobs"
+                " (job_id, tenant_id, recording_id, source_delivery_id,"
+                " consent_ref, status, attempts, max_attempts, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, 'pending', 0, 4, ?, ?)",
+                (
+                    job_id,
+                    tenant_id,
+                    recording_id,
+                    source_delivery_id,
+                    consent_ref,
+                    now,
+                    now,
+                ),
+            )
+        return job_id, True
+
+    def reconciliation_job(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM pocket_reconciliation_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def recover_reconciliation_jobs(self, limit: int = 100) -> list[dict[str, Any]]:
+        """Reset interrupted running jobs and return pending work for startup."""
+        with self._lock:
+            self._db.execute(
+                "UPDATE pocket_reconciliation_jobs SET status='pending', updated_at=?"
+                " WHERE status='running'",
+                (_now_iso(),),
+            )
+            rows = self._db.execute(
+                "SELECT * FROM pocket_reconciliation_jobs"
+                " WHERE status='pending' ORDER BY created_at LIMIT ?",
+                (int(limit),),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def start_reconciliation(self, job_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT * FROM pocket_reconciliation_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None or row["status"] != "pending":
+                return None
+            attempts = int(row["attempts"]) + 1
+            self._db.execute(
+                "UPDATE pocket_reconciliation_jobs"
+                " SET status='running', attempts=?, updated_at=? WHERE job_id=?",
+                (attempts, _now_iso(), job_id),
+            )
+            updated = self._db.execute(
+                "SELECT * FROM pocket_reconciliation_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return dict(updated) if updated is not None else None
+
+    def complete_reconciliation(self, job_id: str, result: dict[str, Any]) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE pocket_reconciliation_jobs"
+                " SET status='completed', last_error=NULL, result_json=?, updated_at=?"
+                " WHERE job_id=?",
+                (json.dumps(result, sort_keys=True), _now_iso(), job_id),
+            )
+
+    def fail_reconciliation(
+        self, job_id: str, error: str, *, retriable: bool
+    ) -> bool:
+        """Record failure and return True when the job should be retried."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT attempts, max_attempts FROM pocket_reconciliation_jobs"
+                " WHERE job_id=?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            retry = retriable and int(row["attempts"]) < int(row["max_attempts"])
+            self._db.execute(
+                "UPDATE pocket_reconciliation_jobs"
+                " SET status=?, last_error=?, updated_at=? WHERE job_id=?",
+                ("pending" if retry else "failed", error[:500], _now_iso(), job_id),
+            )
+        return retry
 
     # -- canonical REST materializations -----------------------------------
 

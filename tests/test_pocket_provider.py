@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import urllib.error
 
 import pytest
@@ -9,13 +10,18 @@ from fastapi.testclient import TestClient
 
 import aftergraph_work_intelligence.api as api_module
 from aftergraph_work_intelligence.api import create_app
-from aftergraph_work_intelligence.pocket import PocketRejected, sign_heypocket_body
+from aftergraph_work_intelligence.pocket import (
+    PocketRejected,
+    PocketStore,
+    sign_heypocket_body,
+)
 from aftergraph_work_intelligence.pocket_provider import (
     PocketProviderError,
     fetch_heypocket_recording,
     normalize_heypocket_recording,
     resolve_pocket_api_key,
 )
+from aftergraph_work_intelligence.store import SQLiteStore
 
 TENANT = "ten_" + "1" * 32
 TOKEN = "test-pocket-rest-token"
@@ -115,6 +121,21 @@ def _configure_live(monkeypatch) -> None:
         "AFTERGRAPH_POCKET_TENANT_MAP",
         json.dumps({"user:user_abc123": TENANT}),
     )
+
+
+def _wait_job(client: TestClient, job_id: str, *, timeout: float = 3.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        response = client.get(
+            f"/v1/pocket/reconciliation-jobs/{job_id}",
+            headers=AUTH,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        if body["status"] in {"completed", "failed"}:
+            return body
+        time.sleep(0.02)
+    raise AssertionError(f"job {job_id} did not finish in time")
 
 
 def test_resolve_api_key_prefers_tenant_scope(monkeypatch):
@@ -240,7 +261,7 @@ def test_live_webhook_without_rest_key_stays_signal_only(monkeypatch):
     assert reads.json()["count"] == 0
 
 
-def test_live_webhook_materializes_rest_not_webhook(monkeypatch):
+def test_live_webhook_queues_rest_reconciliation(monkeypatch):
     _configure_live(monkeypatch)
     monkeypatch.setenv("AFTERGRAPH_POCKET_API_KEY", "provider-api-key")
     monkeypatch.setattr(
@@ -252,11 +273,15 @@ def test_live_webhook_materializes_rest_not_webhook(monkeypatch):
     app = create_app(db_path=":memory:", api_token=TOKEN)
     with TestClient(app) as client:
         response = _post_live(client, _live_payload())
-        assert response.status_code == 201, response.text
+        assert response.status_code == 202, response.text
         body = response.json()
-        assert body["status"] == "reconciled"
-        assert body["canonical_source"] == "rest"
+        assert body["status"] == "reconciliation_queued"
+        assert body["job_created"] is True
         assert body["webhook_claimed_as_truth"] is False
+
+        job = _wait_job(client, body["job_id"])
+        assert job["status"] == "completed"
+        assert job["result"]["canonical_source"] == "rest"
 
         reads = client.get(
             "/v1/pocket/observations",
@@ -286,8 +311,11 @@ def test_rest_revision_retires_previous_materialization(monkeypatch):
 
     with TestClient(app) as client:
         first = _post_live(client, _live_payload())
-        assert first.status_code == 201, first.text
-        assert first.json()["superseded_materialization_ref"] is None
+        assert first.status_code == 202, first.text
+        first_job = _wait_job(client, first.json()["job_id"])
+        assert first_job["status"] == "completed"
+        first_result = first_job["result"]
+        assert first_result["superseded_materialization_ref"] is None
 
         second = _post_live(
             client,
@@ -297,10 +325,12 @@ def test_rest_revision_retires_previous_materialization(monkeypatch):
             ),
             delivery_timestamp="1789749121000",
         )
-        assert second.status_code == 201, second.text
-        assert second.json()["superseded_materialization_ref"] == first.json()[
-            "materialization_ref"
-        ]
+        assert second.status_code == 202, second.text
+        second_job = _wait_job(client, second.json()["job_id"])
+        assert second_job["status"] == "completed"
+        assert second_job["result"]["superseded_materialization_ref"] == (
+            first_result["materialization_ref"]
+        )
 
         reads = client.get(
             "/v1/pocket/observations",
@@ -342,3 +372,54 @@ def test_manual_reconcile_endpoint_uses_rest_plane(monkeypatch):
     assert response.json()["canonical_source"] == "rest"
     assert response.json()["execution_authority"] == "none"
     assert response.json()["webhook_claimed_as_truth"] is False
+
+
+def test_durable_reconciliation_job_dedupes_active_recording():
+    store = SQLiteStore(":memory:")
+    pocket = PocketStore(store)
+    try:
+        first_id, first_created = pocket.enqueue_reconciliation(
+            TENANT,
+            "rec_abc123",
+            "dlv_1",
+            "pocket:owner:user_abc123",
+        )
+        second_id, second_created = pocket.enqueue_reconciliation(
+            TENANT,
+            "rec_abc123",
+            "dlv_2",
+            "pocket:owner:user_abc123",
+        )
+    finally:
+        store.close()
+
+    assert first_created is True
+    assert second_created is False
+    assert second_id == first_id
+
+
+def test_interrupted_reconciliation_recovers_to_pending(tmp_path):
+    db_path = tmp_path / "reconcile.db"
+    store = SQLiteStore(db_path)
+    pocket = PocketStore(store)
+    job_id, created = pocket.enqueue_reconciliation(
+        TENANT,
+        "rec_abc123",
+        "dlv_recover",
+        None,
+    )
+    assert created is True
+    running = pocket.start_reconciliation(job_id)
+    assert running is not None
+    assert running["status"] == "running"
+    store.close()
+
+    store = SQLiteStore(db_path)
+    pocket = PocketStore(store)
+    try:
+        recovered = pocket.recover_reconciliation_jobs()
+    finally:
+        store.close()
+
+    assert [job["job_id"] for job in recovered] == [job_id]
+    assert recovered[0]["status"] == "pending"

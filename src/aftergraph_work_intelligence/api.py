@@ -625,6 +625,66 @@ def create_app(
         task_queue = create_task_queue()
         app.state.task_queue = task_queue
 
+        def process_pocket_reconciliation(job_id: str) -> dict[str, Any]:
+            """Execute one durable Pocket REST reconciliation job."""
+            pocket_store: PocketStore = app.state.pocket_store
+            job = pocket_store.start_reconciliation(job_id)
+            if job is None:
+                current = pocket_store.reconciliation_job(job_id)
+                return current or {"job_id": job_id, "status": "missing"}
+
+            attempts = int(job.get("attempts") or 1)
+            if attempts > 1:
+                time.sleep(min(2 ** (attempts - 2), 8))
+            try:
+                result = _reconcile_pocket_recording(
+                    tenant_id=str(job["tenant_id"]),
+                    recording_id=str(job["recording_id"]),
+                    consent_ref=(
+                        str(job["consent_ref"])
+                        if job.get("consent_ref")
+                        else None
+                    ),
+                    service=app.state.service,
+                    pocket_store=pocket_store,
+                )
+            except PocketRejected as exc:
+                retry = pocket_store.fail_reconciliation(
+                    job_id,
+                    exc.reason,
+                    retriable=exc.code == "PCK-LIVE-002",
+                )
+                if retry:
+                    raise RuntimeError(exc.reason) from exc
+                return {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "code": exc.code,
+                }
+            except PocketProviderError as exc:
+                retry = pocket_store.fail_reconciliation(
+                    job_id,
+                    str(exc),
+                    retriable=exc.retriable,
+                )
+                if retry:
+                    raise RuntimeError(str(exc)) from exc
+                return {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "provider_status": exc.status_code,
+                }
+            except Exception as exc:
+                pocket_store.fail_reconciliation(job_id, str(exc), retriable=False)
+                raise
+
+            pocket_store.complete_reconciliation(job_id, result)
+            return result
+
+        task_queue.register("pocket_reconcile", process_pocket_reconciliation)
+        for pending in app.state.pocket_store.recover_reconciliation_jobs():
+            task_queue.submit("pocket_reconcile", str(pending["job_id"]))
+
         # Initialize audit log
         audit_log = AuditLog(max_entries=50000)
         app.state.audit_log = audit_log
@@ -648,6 +708,7 @@ def create_app(
         try:
             yield
         finally:
+            task_queue.shutdown()
             store.close()
 
     app = FastAPI(
@@ -937,8 +998,6 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         live_timestamp = request.headers.get("X-HeyPocket-Timestamp")
         legacy_signature = request.headers.get("X-Pocket-Signature")
         is_live_provider = bool(live_signature or live_timestamp)
-        canonical_payload: dict[str, Any] | None = None
-        canonical_not_ready = False
         if is_live_provider:
             if not verify_heypocket_signature(
                 secret, live_timestamp, raw, live_signature
@@ -953,35 +1012,6 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                     status_code=422,
                     content={"detail": exc.reason, "code": exc.code},
                 )
-
-            if not payload.get("tombstone"):
-                api_key = resolve_pocket_api_key(tenant_id)
-                if api_key:
-                    try:
-                        recording = fetch_heypocket_recording(
-                            api_key, str(payload.get("conversation_id") or "")
-                        )
-                        canonical_payload = normalize_heypocket_recording(
-                            recording,
-                            tenant_id,
-                            consent_ref=str(payload.get("consent_ref") or "") or None,
-                        )
-                    except PocketRejected as exc:
-                        if exc.code == "PCK-LIVE-002":
-                            canonical_not_ready = True
-                        else:
-                            return JSONResponse(
-                                status_code=502,
-                                content={"detail": exc.reason, "code": exc.code},
-                            )
-                    except PocketProviderError as exc:
-                        return JSONResponse(
-                            status_code=503 if exc.retriable else 502,
-                            content={
-                                "detail": "Pocket REST reconciliation failed",
-                                "retriable": exc.retriable,
-                            },
-                        )
         elif not verify_pocket_signature(secret, raw, legacy_signature):
             return JSONResponse(
                 status_code=401, content={"detail": "invalid signature"}
@@ -1090,16 +1120,13 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             })
 
         if is_live_provider:
-            # Live webhook bytes are event-plane evidence only. Canonical
-            # materialization comes exclusively from the authenticated REST
-            # read performed before delivery registration above.
-            if canonical_payload is None:
+            # Live webhook bytes are event-plane evidence only. Never block
+            # provider delivery on a REST fetch: persist a reconciliation job
+            # and let the background worker hydrate canonical state.
+            api_key = resolve_pocket_api_key(tenant_id)
+            if not api_key:
                 return JSONResponse(status_code=202, content={
-                    "status": (
-                        "canonical_not_ready"
-                        if canonical_not_ready
-                        else "signal_only"
-                    ),
+                    "status": "signal_only",
                     "delivery_id": delivery_id,
                     "observations_created": 0,
                     "applied_sequence": pocket_store.applied_sequence(
@@ -1108,26 +1135,26 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                     "reconciliation_required": True,
                     "webhook_claimed_as_truth": False,
                 })
-            try:
-                live_content = _materialize_pocket_payload(
-                    canonical_payload,
-                    service=service,
-                    pocket_store=pocket_store,
-                )
-            except PocketRejected as exc:
-                return JSONResponse(
-                    status_code=502,
-                    content={"detail": exc.reason, "code": exc.code},
-                )
-            live_content["delivery_id"] = delivery_id
-            live_content["applied_sequence"] = pocket_store.applied_sequence(
-                tenant_id, conversation_id
+            job_id, created_job = pocket_store.enqueue_reconciliation(
+                tenant_id,
+                str(conversation_id),
+                str(delivery_id),
+                str(payload.get("consent_ref") or "") or None,
             )
-            live_content["heypocket_event"] = payload.get("heypocket_event")
-            return JSONResponse(
-                status_code=(201 if live_content["observations_created"] > 0 else 200),
-                content=live_content,
-            )
+            if created_job:
+                request.app.state.task_queue.submit("pocket_reconcile", job_id)
+            return JSONResponse(status_code=202, content={
+                "status": "reconciliation_queued",
+                "delivery_id": delivery_id,
+                "job_id": job_id,
+                "job_created": created_job,
+                "observations_created": 0,
+                "applied_sequence": pocket_store.applied_sequence(
+                    tenant_id, conversation_id
+                ),
+                "reconciliation_required": True,
+                "webhook_claimed_as_truth": False,
+            })
 
         try:
             observations = list(PocketAdapter().observations(payload, pocket_store))
@@ -1343,6 +1370,36 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             status_code=201 if content["observations_created"] > 0 else 200,
             content=content,
         )
+
+    @router.get(
+        "/pocket/reconciliation-jobs/{job_id}",
+        dependencies=[Depends(auth)],
+    )
+    def pocket_reconciliation_job(job_id: str, request: Request) -> JSONResponse:
+        """Read durable status for a Pocket REST reconciliation job."""
+        row = request.app.state.pocket_store.reconciliation_job(job_id)
+        if row is None:
+            return JSONResponse(status_code=404, content={"detail": "job not found"})
+        result = None
+        if row.get("result_json"):
+            try:
+                result = json.loads(str(row["result_json"]))
+            except json.JSONDecodeError:
+                result = None
+        return JSONResponse(content={
+            "job_id": row["job_id"],
+            "tenant_id": row["tenant_id"],
+            "recording_id": row["recording_id"],
+            "source_delivery_id": row["source_delivery_id"],
+            "status": row["status"],
+            "attempts": row["attempts"],
+            "max_attempts": row["max_attempts"],
+            "last_error": row["last_error"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "result": result,
+            "execution_authority": "none",
+        })
 
     @router.post("/pocket/ingest", dependencies=[Depends(auth)])
     async def pocket_ingest(request: Request) -> JSONResponse:
