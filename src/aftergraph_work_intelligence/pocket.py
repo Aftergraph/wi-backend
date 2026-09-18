@@ -280,6 +280,8 @@ def normalize_heypocket_webhook(
                 "lineage_ref": f"pocket:event:{recording_id}:{digest[:12]}",
             }
         )
+    raw_user = payload.get("user")
+    user: dict[str, Any] = raw_user if isinstance(raw_user, dict) else {}
     return {
         "schema": SCHEMA,
         "pocket_id": "pck_" + digest[:32],
@@ -298,7 +300,7 @@ def normalize_heypocket_webhook(
         "governed_path_complete": False,
         "derivations": derivations,
         "asserted_at": event_timestamp or _now_iso(),
-        "consent_ref": f"pocket:owner:{payload.get('user', {}).get('id', 'unknown')}",
+        "consent_ref": f"pocket:owner:{user.get('id', 'unknown')}",
         "purpose": "physical_world_context",
         "conversation_id": recording_id,
         "participants": [],

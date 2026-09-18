@@ -928,18 +928,12 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             })
 
         if payload.get("tombstone"):
-            # Deletion wins over sequence staleness: content is withdrawn from
-            # reads while audit evidence is retained (tombstone semantics).
-            try:
-                observations = list(
-                    PocketAdapter().observations(payload, pocket_store)
-                )
-            except PocketRejected as exc:
-                return JSONResponse(
-                    status_code=422,
-                    content={"detail": exc.reason, "code": exc.code},
-                )
-            voided = [o for o in observations if o.external_id]
+            # Deletion wins over sequence staleness and does not require the
+            # provider to resend transcript content. Withdraw any existing
+            # materialization by stable source_ref while retaining audit.
+            existing = store.get_observation_by_external(
+                tenant_id, "pocket", f"pocket:{source_ref}"
+            ) if source_ref else None
             pocket_store.apply_tombstone(
                 tenant_id, source_ref, delivery_id, "source_deleted"
             )
@@ -950,7 +944,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "tombstone": True,
                 "withdrawn_from_reads": True,
                 "audit_retained": True,
-                "voided_observations": len(voided),
+                "voided_observations": 1 if existing is not None else 0,
                 "webhook_claimed_as_truth": False,
             })
 

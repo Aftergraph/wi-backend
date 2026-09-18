@@ -232,6 +232,55 @@ class TestHeyPocketLiveContract:
         assert data["observations_created"] == 1
         assert data["webhook_claimed_as_truth"] is False
 
+    def test_live_payload_handles_malformed_user_without_500(self):
+        normalized = normalize_heypocket_webhook(
+            _heypocket_payload(user="unexpected-provider-shape"), TENANT
+        )
+        assert normalized["consent_ref"] == "pocket:owner:unknown"
+        assert normalized["claims_execution"] is False
+
+    def test_live_delete_without_transcript_tombstones(self, monkeypatch):
+        monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
+        monkeypatch.setenv(
+            "AFTERGRAPH_POCKET_TENANT_MAP",
+            json.dumps({"user:user_abc123": TENANT}),
+        )
+        app = create_app(db_path=":memory:")
+        with TestClient(app) as c:
+            created = _heypocket_payload()
+            raw = json.dumps(created, separators=(",", ":")).encode()
+            timestamp = "1789749061000"
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": sign_heypocket_body(POCKET_SECRET, timestamp, raw),
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+            assert resp.status_code == 201, resp.text
+
+            deleted = _heypocket_payload(
+                event="recording.deleted",
+                timestamp="2026-09-18T16:32:01.000Z",
+                transcript=None,
+            )
+            raw = json.dumps(deleted, separators=(",", ":")).encode()
+            timestamp = "1789749121000"
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": sign_heypocket_body(POCKET_SECRET, timestamp, raw),
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "tombstoned"
+        assert resp.json()["voided_observations"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Contract vectors PCK-001..007 — ingest / authority boundary (unit level)
