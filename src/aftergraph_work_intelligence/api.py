@@ -54,8 +54,17 @@ from .pocket import (
     PocketStore,
     filter_withdrawn_pocket_rows,
     mcp_answer,
+    normalize_heypocket_webhook,
     resolve_pocket_secret,
+    resolve_pocket_tenant,
+    verify_heypocket_signature,
     verify_pocket_signature,
+)
+from .pocket_provider import (
+    PocketProviderError,
+    fetch_heypocket_recording,
+    normalize_heypocket_recording,
+    resolve_pocket_api_key,
 )
 from .policy import PolicyStore, TenantPolicy
 from .proactivity import SensingRegistry, SensingRejected
@@ -493,6 +502,79 @@ def _persist_autonomy_decision(
         store._db.rollback()
 
 
+def _materialize_pocket_payload(
+    payload: dict[str, Any],
+    *,
+    service: WorkIntelligenceService,
+    pocket_store: PocketStore,
+) -> dict[str, Any]:
+    """Materialize one canonical Pocket REST revision into Wie."""
+    tenant_id = str(payload.get("tenant_id") or "")
+    recording_id = str(payload.get("conversation_id") or "")
+    observations = list(PocketAdapter().observations(payload, pocket_store))
+    if payload.get("consent_ref") and payload.get("purpose"):
+        pocket_store.attach_consent(
+            tenant_id, payload["consent_ref"], payload["purpose"]
+        )
+
+    created = 0
+    observation_ids: list[str] = []
+    actions: list[str] = []
+    for observation in observations:
+        result = service.ingest(observation)
+        observation_ids.append(result.observation.id)
+        actions.append(result.action)
+        if result.action != "replayed":
+            created += 1
+
+    materialization_ref = str(payload.get("materialization_ref") or "")
+    previous = pocket_store.advance_materialization(
+        tenant_id,
+        str(payload.get("source_ref") or ""),
+        materialization_ref,
+    )
+    return {
+        "status": "reconciled",
+        "recording_id": recording_id,
+        "observations_created": created,
+        "observation_ids": observation_ids,
+        "actions": actions,
+        "canonical_source": "rest",
+        "materialization_ref": materialization_ref,
+        "superseded_materialization_ref": (
+            previous if previous and previous != materialization_ref else None
+        ),
+        "reconciles_to_canonical": True,
+        "webhook_claimed_as_truth": False,
+        "execution_authority": "none",
+    }
+
+
+def _reconcile_pocket_recording(
+    *,
+    tenant_id: str,
+    recording_id: str,
+    consent_ref: str | None,
+    service: WorkIntelligenceService,
+    pocket_store: PocketStore,
+) -> dict[str, Any]:
+    """Fetch Pocket canonical REST state and materialize one governed revision."""
+    api_key = resolve_pocket_api_key(tenant_id)
+    if not api_key:
+        raise PocketProviderError("Pocket REST reconciliation is not configured")
+    recording = fetch_heypocket_recording(api_key, recording_id)
+    payload = normalize_heypocket_recording(
+        recording,
+        tenant_id,
+        consent_ref=consent_ref,
+    )
+    return _materialize_pocket_payload(
+        payload,
+        service=service,
+        pocket_store=pocket_store,
+    )
+
+
 def create_app(
     db_path: str | Path = "./aftergraph-work-intelligence.db",
     api_token: str | None = None,
@@ -844,14 +926,63 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if not isinstance(payload, dict):
             return JSONResponse(status_code=400, content={"detail": "invalid payload"})
 
-        tenant_id = payload.get("tenant_id")
+        tenant_id = resolve_pocket_tenant(payload)
         if not tenant_id:
             return JSONResponse(
-                status_code=400, content={"detail": "tenant_id is required"}
+                status_code=400,
+                content={"detail": "Pocket owner/organization is not mapped to an Aftergraph tenant"},
             )
         secret = resolve_pocket_secret(tenant_id)
-        signature = request.headers.get("X-Pocket-Signature")
-        if not verify_pocket_signature(secret, raw, signature):
+        live_signature = request.headers.get("X-HeyPocket-Signature")
+        live_timestamp = request.headers.get("X-HeyPocket-Timestamp")
+        legacy_signature = request.headers.get("X-Pocket-Signature")
+        is_live_provider = bool(live_signature or live_timestamp)
+        canonical_payload: dict[str, Any] | None = None
+        canonical_not_ready = False
+        if is_live_provider:
+            if not verify_heypocket_signature(
+                secret, live_timestamp, raw, live_signature
+            ):
+                return JSONResponse(
+                    status_code=401, content={"detail": "invalid HeyPocket signature"}
+                )
+            try:
+                payload = normalize_heypocket_webhook(payload, tenant_id)
+            except PocketRejected as exc:
+                return JSONResponse(
+                    status_code=422,
+                    content={"detail": exc.reason, "code": exc.code},
+                )
+
+            if not payload.get("tombstone"):
+                api_key = resolve_pocket_api_key(tenant_id)
+                if api_key:
+                    try:
+                        recording = fetch_heypocket_recording(
+                            api_key, str(payload.get("conversation_id") or "")
+                        )
+                        canonical_payload = normalize_heypocket_recording(
+                            recording,
+                            tenant_id,
+                            consent_ref=str(payload.get("consent_ref") or "") or None,
+                        )
+                    except PocketRejected as exc:
+                        if exc.code == "PCK-LIVE-002":
+                            canonical_not_ready = True
+                        else:
+                            return JSONResponse(
+                                status_code=502,
+                                content={"detail": exc.reason, "code": exc.code},
+                            )
+                    except PocketProviderError as exc:
+                        return JSONResponse(
+                            status_code=503 if exc.retriable else 502,
+                            content={
+                                "detail": "Pocket REST reconciliation failed",
+                                "retriable": exc.retriable,
+                            },
+                        )
+        elif not verify_pocket_signature(secret, raw, legacy_signature):
             return JSONResponse(
                 status_code=401, content={"detail": "invalid signature"}
             )
@@ -891,11 +1022,16 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 if exc.original_delivery_id
                 else None
             )
+            lookup_ref = original_ref
+            if is_live_provider and original_ref:
+                lookup_ref = pocket_store.current_materialization_ref(
+                    tenant_id, original_ref
+                )
             original_obs = (
                 store.get_observation_by_external(
-                    tenant_id, "pocket", f"pocket:{original_ref}"
+                    tenant_id, "pocket", f"pocket:{lookup_ref}"
                 )
-                if original_ref
+                if lookup_ref
                 else None
             )
             return JSONResponse(status_code=200, content={
@@ -908,18 +1044,18 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
             })
 
         if payload.get("tombstone"):
-            # Deletion wins over sequence staleness: content is withdrawn from
-            # reads while audit evidence is retained (tombstone semantics).
-            try:
-                observations = list(
-                    PocketAdapter().observations(payload, pocket_store)
+            # Deletion wins over sequence staleness and does not require the
+            # provider to resend transcript content. Withdraw any existing
+            # materialization by stable source_ref while retaining audit.
+            existing_ref = source_ref
+            if is_live_provider and source_ref:
+                existing_ref = (
+                    pocket_store.current_materialization_ref(tenant_id, source_ref)
+                    or source_ref
                 )
-            except PocketRejected as exc:
-                return JSONResponse(
-                    status_code=422,
-                    content={"detail": exc.reason, "code": exc.code},
-                )
-            voided = [o for o in observations if o.external_id]
+            existing = store.get_observation_by_external(
+                tenant_id, "pocket", f"pocket:{existing_ref}"
+            ) if existing_ref else None
             pocket_store.apply_tombstone(
                 tenant_id, source_ref, delivery_id, "source_deleted"
             )
@@ -930,7 +1066,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "tombstone": True,
                 "withdrawn_from_reads": True,
                 "audit_retained": True,
-                "voided_observations": len(voided),
+                "voided_observations": 1 if existing is not None else 0,
                 "webhook_claimed_as_truth": False,
             })
 
@@ -952,6 +1088,46 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "resurrects_superseded_content": False,
                 "webhook_claimed_as_truth": False,
             })
+
+        if is_live_provider:
+            # Live webhook bytes are event-plane evidence only. Canonical
+            # materialization comes exclusively from the authenticated REST
+            # read performed before delivery registration above.
+            if canonical_payload is None:
+                return JSONResponse(status_code=202, content={
+                    "status": (
+                        "canonical_not_ready"
+                        if canonical_not_ready
+                        else "signal_only"
+                    ),
+                    "delivery_id": delivery_id,
+                    "observations_created": 0,
+                    "applied_sequence": pocket_store.applied_sequence(
+                        tenant_id, conversation_id
+                    ),
+                    "reconciliation_required": True,
+                    "webhook_claimed_as_truth": False,
+                })
+            try:
+                live_content = _materialize_pocket_payload(
+                    canonical_payload,
+                    service=service,
+                    pocket_store=pocket_store,
+                )
+            except PocketRejected as exc:
+                return JSONResponse(
+                    status_code=502,
+                    content={"detail": exc.reason, "code": exc.code},
+                )
+            live_content["delivery_id"] = delivery_id
+            live_content["applied_sequence"] = pocket_store.applied_sequence(
+                tenant_id, conversation_id
+            )
+            live_content["heypocket_event"] = payload.get("heypocket_event")
+            return JSONResponse(
+                status_code=(201 if live_content["observations_created"] > 0 else 200),
+                content=live_content,
+            )
 
         try:
             observations = list(PocketAdapter().observations(payload, pocket_store))
@@ -1121,6 +1297,52 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         encoded = jsonable_encoder(asdict(result))
         _fire_webhooks(request.app.state, "observation.ingested", encoded)
         return JSONResponse(status_code=status, content=encoded)
+
+    @router.post("/pocket/reconcile/{recording_id}", dependencies=[Depends(auth)])
+    def pocket_reconcile_recording(
+        recording_id: str,
+        request: Request,
+        tenant_id: str = Query(min_length=1, max_length=128),
+        consent_ref: str | None = Query(default=None, max_length=256),
+    ) -> JSONResponse:
+        """Hydrate one Pocket recording from the canonical REST plane."""
+        service: WorkIntelligenceService = request.app.state.service
+        pocket_store: PocketStore = request.app.state.pocket_store
+        try:
+            content = _reconcile_pocket_recording(
+                tenant_id=tenant_id,
+                recording_id=recording_id,
+                consent_ref=consent_ref,
+                service=service,
+                pocket_store=pocket_store,
+            )
+        except PocketRejected as exc:
+            if exc.code == "PCK-LIVE-002":
+                return JSONResponse(
+                    status_code=202,
+                    content={
+                        "status": "canonical_not_ready",
+                        "recording_id": recording_id,
+                        "reconciliation_required": True,
+                        "webhook_claimed_as_truth": False,
+                    },
+                )
+            return JSONResponse(
+                status_code=422,
+                content={"detail": exc.reason, "code": exc.code},
+            )
+        except PocketProviderError as exc:
+            return JSONResponse(
+                status_code=503 if exc.retriable else 502,
+                content={
+                    "detail": "Pocket REST reconciliation failed",
+                    "retriable": exc.retriable,
+                },
+            )
+        return JSONResponse(
+            status_code=201 if content["observations_created"] > 0 else 200,
+            content=content,
+        )
 
     @router.post("/pocket/ingest", dependencies=[Depends(auth)])
     async def pocket_ingest(request: Request) -> JSONResponse:

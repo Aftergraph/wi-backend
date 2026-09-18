@@ -34,9 +34,13 @@ from aftergraph_work_intelligence.pocket import (
     contains_authority_conflation,
     evaluate_commitment,
     mcp_answer,
+    normalize_heypocket_webhook,
     resolve_pocket_secret,
+    resolve_pocket_tenant,
     scan_injection,
+    sign_heypocket_body,
     sign_pocket_body,
+    verify_heypocket_signature,
     verify_pocket_signature,
 )
 from aftergraph_work_intelligence.store import SQLiteStore
@@ -111,6 +115,26 @@ def _sign_raw(raw: bytes, secret: str = POCKET_SECRET) -> str:
     return sign_pocket_body(secret, raw)
 
 
+def _heypocket_payload(**over):
+    payload = {
+        "event": "transcription.completed",
+        "timestamp": "2026-09-18T16:31:01.000Z",
+        "user": {"id": "user_abc123", "email": "jonas@example.invalid"},
+        "recording": {
+            "id": "rec_abc123",
+            "title": "Pocket live contract test",
+            "duration": 16,
+            "language": "Danish",
+            "createdAt": "2026-09-18T16:30:45.000Z",
+        },
+        "transcript": [
+            {"speaker": "Speaker 0", "text": "Test af Pocket webhook", "start": 0.0, "end": 2.0}
+        ],
+    }
+    payload.update(over)
+    return payload
+
+
 @pytest.fixture()
 def client(monkeypatch):
     monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
@@ -142,6 +166,148 @@ def _post_webhook(c: TestClient, body: dict, secret: str = POCKET_SECRET):
 
 def _pocket_store() -> PocketStore:
     return PocketStore(SQLiteStore(":memory:"))
+
+
+# ---------------------------------------------------------------------------
+# Pocket live-provider v0.2 compatibility — official HeyPocket webhook shape
+# ---------------------------------------------------------------------------
+
+
+class TestHeyPocketLiveContract:
+    def test_official_signature_binds_timestamp_and_raw_body(self):
+        raw = json.dumps(_heypocket_payload(), separators=(",", ":")).encode()
+        timestamp = "1789749061000"
+        signature = sign_heypocket_body(POCKET_SECRET, timestamp, raw)
+        assert verify_heypocket_signature(POCKET_SECRET, timestamp, raw, signature)
+        assert not verify_heypocket_signature(POCKET_SECRET, timestamp, raw + b" ", signature)
+        assert not verify_heypocket_signature(POCKET_SECRET, "1789749061001", raw, signature)
+
+    def test_live_payload_requires_explicit_tenant_mapping(self, monkeypatch):
+        monkeypatch.delenv("AFTERGRAPH_POCKET_TENANT_MAP", raising=False)
+        monkeypatch.delenv("AFTERGRAPH_POCKET_DEFAULT_TENANT_ID", raising=False)
+        assert resolve_pocket_tenant(_heypocket_payload()) is None
+
+    def test_live_payload_maps_user_to_aftergraph_tenant(self, monkeypatch):
+        monkeypatch.setenv(
+            "AFTERGRAPH_POCKET_TENANT_MAP",
+            json.dumps({"user:user_abc123": TENANT}),
+        )
+        assert resolve_pocket_tenant(_heypocket_payload()) == TENANT
+
+    def test_live_payload_normalizes_to_observation_contract(self):
+        normalized = normalize_heypocket_webhook(_heypocket_payload(), TENANT)
+        assert normalized["schema"] == "pocket-source/0.1"
+        assert normalized["tenant_id"] == TENANT
+        assert normalized["credential_scope"] == TENANT
+        assert normalized["claims_execution"] is False
+        assert normalized["self_executes"] is False
+        assert normalized["conversation_id"] == "rec_abc123"
+        assert normalized["segments"][0]["speaker"] == "Speaker 0"
+        assert normalized["source_ref"] == "pocket:recording:rec_abc123"
+
+    def test_live_webhook_endpoint_accepts_official_headers_and_shape(self, monkeypatch):
+        monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
+        monkeypatch.setenv(
+            "AFTERGRAPH_POCKET_TENANT_MAP",
+            json.dumps({"user:user_abc123": TENANT}),
+        )
+        app = create_app(db_path=":memory:")
+        with TestClient(app) as c:
+            payload = _heypocket_payload()
+            raw = json.dumps(payload, separators=(",", ":")).encode()
+            timestamp = "1789749061000"
+            signature = sign_heypocket_body(POCKET_SECRET, timestamp, raw)
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": signature,
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+        assert resp.status_code == 202, resp.text
+        data = resp.json()
+        assert data["status"] == "signal_only"
+        assert data["observations_created"] == 0
+        assert data["reconciliation_required"] is True
+        assert data["webhook_claimed_as_truth"] is False
+
+    def test_live_payload_handles_malformed_user_without_500(self):
+        normalized = normalize_heypocket_webhook(
+            _heypocket_payload(user="unexpected-provider-shape"), TENANT
+        )
+        assert normalized["consent_ref"] == "pocket:owner:unknown"
+        assert normalized["claims_execution"] is False
+
+    def test_live_delete_without_transcript_tombstones(self, monkeypatch):
+        monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
+        monkeypatch.setenv(
+            "AFTERGRAPH_POCKET_TENANT_MAP",
+            json.dumps({"user:user_abc123": TENANT}),
+        )
+        app = create_app(db_path=":memory:")
+        with TestClient(app) as c:
+            created = _heypocket_payload()
+            raw = json.dumps(created, separators=(",", ":")).encode()
+            timestamp = "1789749061000"
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": sign_heypocket_body(POCKET_SECRET, timestamp, raw),
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+            assert resp.status_code == 202, resp.text
+            assert resp.json()["status"] == "signal_only"
+
+            deleted = _heypocket_payload(
+                event="recording.deleted",
+                timestamp="2026-09-18T16:32:01.000Z",
+                transcript=None,
+            )
+            raw = json.dumps(deleted, separators=(",", ":")).encode()
+            timestamp = "1789749121000"
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": sign_heypocket_body(POCKET_SECRET, timestamp, raw),
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "tombstoned"
+        assert resp.json()["voided_observations"] == 0
+
+    def test_live_event_without_transcript_is_signal_only(self, monkeypatch):
+        monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
+        monkeypatch.setenv(
+            "AFTERGRAPH_POCKET_TENANT_MAP",
+            json.dumps({"user:user_abc123": TENANT}),
+        )
+        app = create_app(db_path=":memory:")
+        with TestClient(app) as c:
+            payload = _heypocket_payload(event="recording.created", transcript=None)
+            raw = json.dumps(payload, separators=(",", ":")).encode()
+            timestamp = "1789749061000"
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": sign_heypocket_body(POCKET_SECRET, timestamp, raw),
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["status"] == "signal_only"
+        assert resp.json()["observations_created"] == 0
+        assert resp.json()["reconciliation_required"] is True
+        assert resp.json()["webhook_claimed_as_truth"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -212,3 +212,90 @@ def test_webhook_hmac_rejected_with_wrong_secret(tmp_path):
             },
         )
     assert resp.status_code == 401
+
+
+def _secure_pocket_payload():
+    return {
+        "event": "transcription.completed",
+        "timestamp": "2026-09-18T18:00:00.000Z",
+        "user": {"id": "user_secure_test"},
+        "recording": {"id": "rec_secure_test"},
+        "transcript": [
+            {
+                "speaker": "Speaker 0",
+                "text": "Secure Pocket webhook test",
+                "start": 0.0,
+                "end": 1.0,
+            }
+        ],
+    }
+
+
+def test_pocket_webhook_signature_reaches_exact_route_verifier(tmp_path, monkeypatch):
+    import json as _json
+
+    from aftergraph_work_intelligence.pocket import sign_heypocket_body
+
+    tenant = "ten_" + "1" * 32
+    secret = "pocket-production-secret"
+    monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", secret)
+    monkeypatch.setenv(
+        "AFTERGRAPH_POCKET_TENANT_MAP",
+        _json.dumps({"user:user_secure_test": tenant}),
+    )
+    payload = _secure_pocket_payload()
+    raw = _json.dumps(payload, separators=(",", ":")).encode()
+    timestamp = "1789749121000"
+    signature = sign_heypocket_body(secret, timestamp, raw)
+
+    app = create_app(db_path=tmp_path / "secure.db", api_token="master-token")
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/webhook/pocket",
+            content=raw,
+            headers={
+                "Content-Type": "application/json",
+                "X-HeyPocket-Signature": signature,
+                "X-HeyPocket-Timestamp": timestamp,
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "signal_only"
+    assert response.json()["reconciliation_required"] is True
+    assert response.json()["webhook_claimed_as_truth"] is False
+
+
+def test_pocket_webhook_missing_signature_is_rejected_by_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "AFTERGRAPH_POCKET_WEBHOOK_SECRET",
+        "pocket-production-secret",
+    )
+    app = create_app(db_path=tmp_path / "secure.db", api_token="master-token")
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/webhook/pocket",
+            json=_secure_pocket_payload(),
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid or missing Pocket signature headers"
+
+
+def test_pocket_signature_headers_never_authenticate_other_routes(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "AFTERGRAPH_POCKET_WEBHOOK_SECRET",
+        "pocket-production-secret",
+    )
+    app = create_app(db_path=tmp_path / "secure.db", api_token="master-token")
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/work-items",
+            params={"tenant_id": "tenant"},
+            headers={
+                "X-HeyPocket-Signature": "0" * 64,
+                "X-HeyPocket-Timestamp": "1789749121000",
+            },
+        )
+
+    assert response.status_code == 401
