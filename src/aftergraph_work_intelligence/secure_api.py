@@ -15,6 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from .api import EVALUATOR_PATH, any_tenant_webhook_secrets
 from .api import create_app as create_core_app
+from .pocket import any_pocket_webhook_secrets
 from .policy import PolicyStore
 from .publishers import Publisher
 
@@ -33,6 +34,7 @@ _PUBLIC_PATHS = {
     "/redoc",
 }
 _GITHUB_WEBHOOK_PATH = "/v1/webhook/github"
+_POCKET_WEBHOOK_PATH = "/v1/webhook/pocket"
 _CORS_HEADERS = {
     "access-control-allow-origin",
     "access-control-allow-credentials",
@@ -153,6 +155,29 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
             return False
         return False
 
+    def _pocket_webhook_deferred(self, request: Request) -> bool:
+        """Allow only Pocket webhook-shaped requests through to exact verification.
+
+        The route handler resolves the claimed tenant and verifies the matching
+        tenant-scoped signing secret. This middleware only defers that check on
+        the exact Pocket webhook path when the expected signature headers and a
+        configured Pocket signing secret exist.
+        """
+        if request.url.path != _POCKET_WEBHOOK_PATH:
+            return False
+        if not any_pocket_webhook_secrets():
+            return False
+        live_signature = request.headers.get("x-heypocket-signature")
+        live_timestamp = request.headers.get("x-heypocket-timestamp")
+        legacy_signature = request.headers.get("x-pocket-signature")
+        if live_signature and live_timestamp:
+            request.state.pocket_webhook_deferred = True
+            return True
+        if legacy_signature:
+            request.state.pocket_webhook_deferred = True
+            return True
+        return False
+
     def _apply_cors(self, response: Response, origin: str | None) -> None:
         for header in tuple(response.headers.keys()):
             if header.lower() in _CORS_HEADERS:
@@ -199,6 +224,25 @@ class ProductionSecurityMiddleware(BaseHTTPMiddleware):
                     JSONResponse(
                         status_code=503,
                         content={"detail": "GitHub webhook secret is not configured"},
+                    ),
+                    origin,
+                    path,
+                )
+        elif path == _POCKET_WEBHOOK_PATH:
+            if not any_pocket_webhook_secrets():
+                return self._finalize(
+                    JSONResponse(
+                        status_code=503,
+                        content={"detail": "Pocket webhook secret is not configured"},
+                    ),
+                    origin,
+                    path,
+                )
+            if not self._pocket_webhook_deferred(request):
+                return self._finalize(
+                    JSONResponse(
+                        status_code=401,
+                        content={"detail": "invalid or missing Pocket signature headers"},
                     ),
                     origin,
                     path,

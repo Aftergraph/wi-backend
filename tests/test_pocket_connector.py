@@ -226,10 +226,11 @@ class TestHeyPocketLiveContract:
                     "Content-Type": "application/json",
                 },
             )
-        assert resp.status_code == 201, resp.text
+        assert resp.status_code == 202, resp.text
         data = resp.json()
-        assert data["status"] == "ingested"
-        assert data["observations_created"] == 1
+        assert data["status"] == "signal_only"
+        assert data["observations_created"] == 0
+        assert data["reconciliation_required"] is True
         assert data["webhook_claimed_as_truth"] is False
 
     def test_live_payload_handles_malformed_user_without_500(self):
@@ -259,7 +260,8 @@ class TestHeyPocketLiveContract:
                     "Content-Type": "application/json",
                 },
             )
-            assert resp.status_code == 201, resp.text
+            assert resp.status_code == 202, resp.text
+            assert resp.json()["status"] == "signal_only"
 
             deleted = _heypocket_payload(
                 event="recording.deleted",
@@ -279,7 +281,7 @@ class TestHeyPocketLiveContract:
             )
         assert resp.status_code == 200, resp.text
         assert resp.json()["status"] == "tombstoned"
-        assert resp.json()["voided_observations"] == 1
+        assert resp.json()["voided_observations"] == 0
 
     def test_live_event_without_transcript_is_signal_only(self, monkeypatch):
         monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
