@@ -281,6 +281,32 @@ class TestHeyPocketLiveContract:
         assert resp.json()["status"] == "tombstoned"
         assert resp.json()["voided_observations"] == 1
 
+    def test_live_event_without_transcript_is_signal_only(self, monkeypatch):
+        monkeypatch.setenv("AFTERGRAPH_POCKET_WEBHOOK_SECRET", POCKET_SECRET)
+        monkeypatch.setenv(
+            "AFTERGRAPH_POCKET_TENANT_MAP",
+            json.dumps({"user:user_abc123": TENANT}),
+        )
+        app = create_app(db_path=":memory:")
+        with TestClient(app) as c:
+            payload = _heypocket_payload(event="recording.created", transcript=None)
+            raw = json.dumps(payload, separators=(",", ":")).encode()
+            timestamp = "1789749061000"
+            resp = c.post(
+                "/v1/webhook/pocket",
+                content=raw,
+                headers={
+                    "X-HeyPocket-Signature": sign_heypocket_body(POCKET_SECRET, timestamp, raw),
+                    "X-HeyPocket-Timestamp": timestamp,
+                    "Content-Type": "application/json",
+                },
+            )
+        assert resp.status_code == 202, resp.text
+        assert resp.json()["status"] == "signal_only"
+        assert resp.json()["observations_created"] == 0
+        assert resp.json()["reconciliation_required"] is True
+        assert resp.json()["webhook_claimed_as_truth"] is False
+
 
 # ---------------------------------------------------------------------------
 # Contract vectors PCK-001..007 — ingest / authority boundary (unit level)

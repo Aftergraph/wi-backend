@@ -967,6 +967,21 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
                 "webhook_claimed_as_truth": False,
             })
 
+        if payload.get("heypocket_event") and not payload.get("segments"):
+            # Some provider events (for example recording.created) can arrive
+            # before a transcript exists. Webhooks are event-plane signals,
+            # not reconciliation truth: accept the signal and hydrate later.
+            return JSONResponse(status_code=202, content={
+                "status": "signal_only",
+                "delivery_id": delivery_id,
+                "observations_created": 0,
+                "applied_sequence": pocket_store.applied_sequence(
+                    tenant_id, conversation_id
+                ),
+                "reconciliation_required": True,
+                "webhook_claimed_as_truth": False,
+            })
+
         try:
             observations = list(PocketAdapter().observations(payload, pocket_store))
         except PocketRejected as exc:
