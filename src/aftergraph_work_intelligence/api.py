@@ -54,7 +54,10 @@ from .pocket import (
     PocketStore,
     filter_withdrawn_pocket_rows,
     mcp_answer,
+    normalize_heypocket_webhook,
     resolve_pocket_secret,
+    resolve_pocket_tenant,
+    verify_heypocket_signature,
     verify_pocket_signature,
 )
 from .policy import PolicyStore, TenantPolicy
@@ -844,14 +847,31 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         if not isinstance(payload, dict):
             return JSONResponse(status_code=400, content={"detail": "invalid payload"})
 
-        tenant_id = payload.get("tenant_id")
+        tenant_id = resolve_pocket_tenant(payload)
         if not tenant_id:
             return JSONResponse(
-                status_code=400, content={"detail": "tenant_id is required"}
+                status_code=400,
+                content={"detail": "Pocket owner/organization is not mapped to an Aftergraph tenant"},
             )
         secret = resolve_pocket_secret(tenant_id)
-        signature = request.headers.get("X-Pocket-Signature")
-        if not verify_pocket_signature(secret, raw, signature):
+        live_signature = request.headers.get("X-HeyPocket-Signature")
+        live_timestamp = request.headers.get("X-HeyPocket-Timestamp")
+        legacy_signature = request.headers.get("X-Pocket-Signature")
+        if live_signature or live_timestamp:
+            if not verify_heypocket_signature(
+                secret, live_timestamp, raw, live_signature
+            ):
+                return JSONResponse(
+                    status_code=401, content={"detail": "invalid HeyPocket signature"}
+                )
+            try:
+                payload = normalize_heypocket_webhook(payload, tenant_id)
+            except PocketRejected as exc:
+                return JSONResponse(
+                    status_code=422,
+                    content={"detail": exc.reason, "code": exc.code},
+                )
+        elif not verify_pocket_signature(secret, raw, legacy_signature):
             return JSONResponse(
                 status_code=401, content={"detail": "invalid signature"}
             )

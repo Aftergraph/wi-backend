@@ -165,6 +165,153 @@ def verify_pocket_signature(
     return hmac.compare_digest(computed, expected)
 
 
+def sign_heypocket_body(secret: str, timestamp: str, body: bytes) -> str:
+    """Sign the current HeyPocket webhook contract.
+
+    HeyPocket signs the exact raw request bytes as ``{timestamp}.{rawBody}``
+    with HMAC-SHA256 and sends the lowercase hex digest in
+    ``X-HeyPocket-Signature``.
+    """
+    message = timestamp.encode("utf-8") + b"." + body
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def verify_heypocket_signature(
+    secret: str | None,
+    timestamp: str | None,
+    body: bytes,
+    signature_header: str | None,
+) -> bool:
+    """Fail closed against the current HeyPocket timestamp-bound signature."""
+    if not secret or not timestamp or not signature_header:
+        return False
+    presented = signature_header.removeprefix("sha256=").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{64}", presented):
+        return False
+    expected = sign_heypocket_body(secret, timestamp, body)
+    return hmac.compare_digest(expected, presented)
+
+
+def resolve_pocket_tenant(payload: dict[str, Any]) -> str | None:
+    """Resolve a HeyPocket owner/org to an Aftergraph tenant without guessing.
+
+    ``AFTERGRAPH_POCKET_TENANT_MAP`` is a JSON object keyed by
+    ``organization:<id>`` or ``user:<id>``.  A single-tenant deployment may
+    set ``AFTERGRAPH_POCKET_DEFAULT_TENANT_ID``.  Existing internal contract
+    payloads keep their explicit ``tenant_id``.
+    """
+    explicit = payload.get("tenant_id")
+    if isinstance(explicit, str) and _TENANT_ID_RE.fullmatch(explicit):
+        return explicit
+    try:
+        mapping = json.loads(os.getenv("AFTERGRAPH_POCKET_TENANT_MAP", "{}"))
+    except (TypeError, ValueError):
+        mapping = {}
+    if not isinstance(mapping, dict):
+        mapping = {}
+    organization = payload.get("organization")
+    if isinstance(organization, dict) and organization.get("id"):
+        candidate = mapping.get(f"organization:{organization['id']}")
+        if isinstance(candidate, str) and _TENANT_ID_RE.fullmatch(candidate):
+            return candidate
+    user = payload.get("user")
+    if isinstance(user, dict) and user.get("id"):
+        candidate = mapping.get(f"user:{user['id']}")
+        if isinstance(candidate, str) and _TENANT_ID_RE.fullmatch(candidate):
+            return candidate
+    default = os.getenv("AFTERGRAPH_POCKET_DEFAULT_TENANT_ID")
+    return default if default and _TENANT_ID_RE.fullmatch(default) else None
+
+
+def _heypocket_timestamp_ms(value: Any) -> int:
+    if not isinstance(value, str) or not value:
+        return 0
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return 0
+    return int(parsed.timestamp() * 1000)
+
+
+def normalize_heypocket_webhook(
+    payload: dict[str, Any], tenant_id: str
+) -> dict[str, Any]:
+    """Map the public HeyPocket webhook envelope into pocket-source/0.1."""
+    event = str(payload.get("event") or "unknown")
+    event_timestamp = str(payload.get("timestamp") or "")
+    recording = payload.get("recording") if isinstance(payload.get("recording"), dict) else {}
+    recording_id = str(recording.get("id") or "")
+    if not recording_id:
+        raise PocketRejected("PCK-LIVE-001", "HeyPocket recording.id is required")
+    digest = hashlib.sha256(
+        f"{event}|{recording_id}|{event_timestamp}".encode()
+    ).hexdigest()
+    transcript = payload.get("transcript")
+    segments: list[dict[str, Any]] = []
+    if isinstance(transcript, list):
+        for item in transcript:
+            if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+                continue
+            segments.append(
+                {
+                    "text": str(item.get("text") or "").strip(),
+                    "speaker": item.get("speaker"),
+                    "speaker_confidence": item.get("speakerConfidence"),
+                    "conversation_id": recording_id,
+                }
+            )
+    derivations: list[dict[str, Any]] = []
+    if segments:
+        derivations.append(
+            {
+                "derivation": "transcript",
+                "weight": DERIVATION_WEIGHTS["transcript"],
+                "uncertainty": DERIVATION_UNCERTAINTY_DEFAULTS["transcript"],
+                "lineage_ref": f"pocket:transcript:{recording_id}:{digest[:12]}",
+            }
+        )
+    if not derivations:
+        derivations.append(
+            {
+                "derivation": "summary",
+                "weight": DERIVATION_WEIGHTS["summary"],
+                "uncertainty": DERIVATION_UNCERTAINTY_DEFAULTS["summary"],
+                "lineage_ref": f"pocket:event:{recording_id}:{digest[:12]}",
+            }
+        )
+    return {
+        "schema": SCHEMA,
+        "pocket_id": "pck_" + digest[:32],
+        "tenant_id": tenant_id,
+        "credential_scope": tenant_id,
+        "source_ref": f"pocket:recording:{recording_id}",
+        "observation_ref": f"wie:observation:{digest[:32]}",
+        "classification": "research",
+        "claims_principal_identity": False,
+        "claims_principal_authentication": False,
+        "contains_instruction": False,
+        "self_executes": False,
+        "claims_execution": False,
+        "candidate_kind": "observation_update",
+        "admitted_by_tg": False,
+        "governed_path_complete": False,
+        "derivations": derivations,
+        "asserted_at": event_timestamp or _now_iso(),
+        "consent_ref": f"pocket:owner:{payload.get('user', {}).get('id', 'unknown')}",
+        "purpose": "physical_world_context",
+        "conversation_id": recording_id,
+        "participants": [],
+        "segments": segments,
+        "delivery_channel": "webhook",
+        "delivery_id": "dlv_" + digest[:32],
+        "idempotency_key": "idem_" + digest[:32],
+        "sequence_number": _heypocket_timestamp_ms(event_timestamp),
+        "tombstone": event == "recording.deleted",
+        "heypocket_event": event,
+        "heypocket_timestamp": event_timestamp,
+    }
+
+
 def _tenant_secret_env_name(tenant_id: str) -> str:
     slug = re.sub(r"\W", "_", tenant_id).upper().strip("_") or "DEFAULT"
     return f"AFTERGRAPH_POCKET_WEBHOOK_SECRET_{slug}"
