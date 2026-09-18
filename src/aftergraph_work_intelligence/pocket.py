@@ -239,7 +239,8 @@ def normalize_heypocket_webhook(
     """Map the public HeyPocket webhook envelope into pocket-source/0.1."""
     event = str(payload.get("event") or "unknown")
     event_timestamp = str(payload.get("timestamp") or "")
-    recording = payload.get("recording") if isinstance(payload.get("recording"), dict) else {}
+    raw_recording = payload.get("recording")
+    recording: dict[str, Any] = raw_recording if isinstance(raw_recording, dict) else {}
     recording_id = str(recording.get("id") or "")
     if not recording_id:
         raise PocketRejected("PCK-LIVE-001", "HeyPocket recording.id is required")
