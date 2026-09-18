@@ -320,6 +320,16 @@ def _tenant_secret_env_name(tenant_id: str) -> str:
     return f"AFTERGRAPH_POCKET_WEBHOOK_SECRET_{slug}"
 
 
+def any_pocket_webhook_secrets() -> bool:
+    """Return whether any Pocket webhook signing secret is configured."""
+    return any(
+        value
+        for key, value in os.environ.items()
+        if key == "AFTERGRAPH_POCKET_WEBHOOK_SECRET"
+        or key.startswith("AFTERGRAPH_POCKET_WEBHOOK_SECRET_")
+    )
+
+
 def resolve_pocket_secret(
     tenant_id: str | None, global_default: str | None = None
 ) -> str | None:
@@ -423,6 +433,7 @@ def validate_pocket_record(
         "pocket_id": pocket_id,
         "tenant_id": tenant_id,
         "source_ref": payload.get("source_ref") or "",
+        "materialization_ref": payload.get("materialization_ref") or "",
         "observation_ref": payload.get("observation_ref") or "",
         "classification": classification,
         "contains_instruction": bool(payload.get("contains_instruction")),
@@ -536,15 +547,17 @@ class PocketAdapter(SourceAdapter):
             )
 
         text = "\n".join(seg["text"] for seg in usable)
+        materialization_ref = record["materialization_ref"] or record["source_ref"]
         yield ObservationInput(
             tenant_id=record["tenant_id"],
             source=self.source,
             text=text,
-            external_id=f"pocket:{record['source_ref']}",
+            external_id=f"pocket:{materialization_ref}",
             actor=None,
             metadata={
                 "pocket_id": record["pocket_id"],
                 "pocket_source_ref": record["source_ref"],
+                "pocket_materialization_ref": materialization_ref,
                 "observation_ref": record["observation_ref"],
                 "classification": record["classification"],
                 "candidate_kind": record["candidate_kind"],
@@ -655,6 +668,23 @@ CREATE TABLE IF NOT EXISTS pocket_consents (
     revoked INTEGER NOT NULL DEFAULT 0,
     at TEXT NOT NULL,
     PRIMARY KEY (tenant_id, consent_ref)
+);
+
+CREATE TABLE IF NOT EXISTS pocket_materializations (
+    tenant_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    current_materialization_ref TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, source_ref)
+);
+
+CREATE TABLE IF NOT EXISTS pocket_retired_materializations (
+    tenant_id TEXT NOT NULL,
+    materialization_ref TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    replaced_by TEXT NOT NULL,
+    at TEXT NOT NULL,
+    PRIMARY KEY (tenant_id, materialization_ref)
 );
 """
 
@@ -769,6 +799,75 @@ class PocketStore:
                 (tenant_id, conversation_id),
             ).fetchone()
         return int(row["applied_sequence"]) if row else 0
+
+    # -- canonical REST materializations -----------------------------------
+
+    def advance_materialization(
+        self,
+        tenant_id: str,
+        source_ref: str,
+        materialization_ref: str,
+    ) -> str | None:
+        """Advance canonical revision and retire the previous materialization."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT current_materialization_ref FROM pocket_materializations"
+                " WHERE tenant_id = ? AND source_ref = ?",
+                (tenant_id, source_ref),
+            ).fetchone()
+            previous = str(row["current_materialization_ref"]) if row else None
+            if previous is None:
+                legacy = self._db.execute(
+                    "SELECT 1 FROM intake_observations"
+                    " WHERE tenant_id = ? AND source = 'pocket' AND external_id = ?"
+                    " LIMIT 1",
+                    (tenant_id, f"pocket:{source_ref}"),
+                ).fetchone()
+                if legacy is not None:
+                    previous = source_ref
+            if previous == materialization_ref:
+                return previous
+            if previous:
+                self._db.execute(
+                    "INSERT OR REPLACE INTO pocket_retired_materializations"
+                    " (tenant_id, materialization_ref, source_ref, replaced_by, at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (tenant_id, previous, source_ref, materialization_ref, _now_iso()),
+                )
+            self._db.execute(
+                "INSERT INTO pocket_materializations"
+                " (tenant_id, source_ref, current_materialization_ref, updated_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(tenant_id, source_ref) DO UPDATE SET"
+                " current_materialization_ref=excluded.current_materialization_ref,"
+                " updated_at=excluded.updated_at",
+                (tenant_id, source_ref, materialization_ref, _now_iso()),
+            )
+            return previous
+
+    def current_materialization_ref(
+        self, tenant_id: str, source_ref: str
+    ) -> str | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT current_materialization_ref FROM pocket_materializations"
+                " WHERE tenant_id = ? AND source_ref = ?",
+                (tenant_id, source_ref),
+            ).fetchone()
+        return str(row["current_materialization_ref"]) if row else None
+
+    def is_materialization_retired(
+        self, tenant_id: str, materialization_ref: str
+    ) -> bool:
+        if not materialization_ref:
+            return False
+        with self._lock:
+            row = self._db.execute(
+                "SELECT 1 FROM pocket_retired_materializations"
+                " WHERE tenant_id = ? AND materialization_ref = ? LIMIT 1",
+                (tenant_id, materialization_ref),
+            ).fetchone()
+        return row is not None
 
     # -- edits, tombstones, withdrawal ------------------------------------
 
@@ -902,6 +1001,7 @@ class PocketStore:
                 "pocket_tombstones",
                 "pocket_consents",
                 "pocket_supersessions",
+                "pocket_retired_materializations",
             ):
                 row = self._db.execute(
                     f"SELECT 1 FROM {table} WHERE tenant_id = ? LIMIT 1",
@@ -936,7 +1036,13 @@ class PocketStore:
                 or (row["external_id"] or "").removeprefix("pocket:")
             )
             consent_ref = metadata.get("consent_ref")
-            if self.is_withdrawn(tenant_id, source_ref, consent_ref):
+            materialization_ref = str(
+                metadata.get("pocket_materialization_ref") or source_ref
+            )
+            if (
+                self.is_withdrawn(tenant_id, source_ref, consent_ref)
+                or self.is_materialization_retired(tenant_id, materialization_ref)
+            ):
                 withdrawn += 1
             else:
                 active += 1
@@ -983,9 +1089,14 @@ def filter_withdrawn_pocket_rows(
         source_ref = str(
             metadata.get("pocket_source_ref") or external_id.removeprefix("pocket:")
         )
+        materialization_ref = str(
+            metadata.get("pocket_materialization_ref") or source_ref
+        )
         try:
             if pocket.is_withdrawn(
                 tenant_id, source_ref, metadata.get("consent_ref")
+            ) or pocket.is_materialization_retired(
+                tenant_id, materialization_ref
             ):
                 continue
         except Exception:
