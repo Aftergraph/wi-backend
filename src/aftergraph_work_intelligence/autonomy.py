@@ -286,6 +286,7 @@ def evaluate_autonomy(value: AutonomyEvaluationInput) -> dict[str, Any]:
     blast_radius = _compute_blast_radius(value)
     return {
         "schema": "aftergraph.autonomy-decision/1.0",
+        "observed_at": observed_at,
         "request_id": value.request_id,
         "subject": {
             "tenant_id": value.tenant_id,

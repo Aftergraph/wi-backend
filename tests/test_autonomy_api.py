@@ -71,6 +71,26 @@ class TestAutonomyEndpoint:
             assert data["human_action"]["required"] is False
             assert data["authority"]["execution_state"] == "not_executed"
             assert data["schema"] == "aftergraph.autonomy-decision/1.0"
+            assert "observed_at" in data
+            assert isinstance(data["observed_at"], str)
+            assert data["observed_at"].endswith("Z")
+
+    def test_decision_record_carries_observed_at_timestamp(self):
+        import re
+
+        with _client() as client:
+            body = _make_request()
+            resp = client.post(
+                "/v1/autonomy/decisions/evaluate",
+                json=body,
+                headers={"Authorization": "Bearer test-token"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert re.match(
+                r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$",
+                data["observed_at"],
+            )
 
     def test_auth_secret_change_is_blocked(self):
         with _client() as client:

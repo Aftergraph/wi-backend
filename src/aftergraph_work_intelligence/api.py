@@ -2391,6 +2391,7 @@ Work Intelligence Engine. Production-grade observation → WorkItem inference en
         _persist_autonomy_decision(store, payload, evaluation)
         return {
             "schema": evaluation["schema"],
+            "observed_at": evaluation["observed_at"],
             "request_id": evaluation["request_id"],
             "subject": evaluation["subject"],
             "capability": evaluation["capability"],
