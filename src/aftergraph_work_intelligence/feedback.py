@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from typing import Literal
 
 FeedbackKind = Literal["request", "bug", "idea", "question", "docs", "release-feedback"]
