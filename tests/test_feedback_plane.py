@@ -1,4 +1,7 @@
-from aftergraph_work_intelligence.feedback import create_feedback_event, cluster_feedback
+from aftergraph_work_intelligence.feedback import (
+    cluster_feedback,
+    create_feedback_event,
+)
 
 
 def test_feedback_is_proposal_only():
