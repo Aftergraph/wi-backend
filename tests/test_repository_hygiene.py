@@ -74,3 +74,25 @@ def test_privileged_reusable_workflow_is_pinned_to_an_immutable_sha() -> None:
         r"Aftergraph/\.github/\.github/workflows/auto-merge-dependabot\.yml@[0-9a-f]{40}",
         uses.group(1),
     )
+
+
+def test_required_workflows_support_merge_queue_checks() -> None:
+    ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    codeql = (REPO / ".github" / "workflows" / "codeql.yml").read_text(encoding="utf-8")
+
+    merge_group_trigger = re.compile(
+        r"^  merge_group:\n    types: \[checks_requested\]$",
+        flags=re.MULTILINE,
+    )
+
+    for workflow in (ci, codeql):
+        assert "  push:" in workflow
+        assert "  pull_request:" in workflow
+        assert merge_group_trigger.search(workflow)
+
+    assert "  schedule:" in codeql
+    assert 'python-version: ["3.11", "3.12"]' in ci
+    assert "  production-container-smoke:" in ci
+    assert "  analyze:" in codeql
+    assert "    name: Analyze" in codeql
+    assert "        language: [python]" in codeql
